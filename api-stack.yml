@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  ia-ts-app:
+    image: ia-ts-app:latest
+    networks:
+      - network_swarm_public
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=network_swarm_public"
+        - "traefik.http.routers.ia-ts-app.rule=Host(`api-test.mlgrupo.com.br`)"
+        - "traefik.http.routers.ia-ts-app.entrypoints=websecure"
+        - "traefik.http.routers.ia-ts-app.tls.certresolver=letsencryptresolver"
+        - "traefik.http.services.ia-ts-app.loadbalancer.server.port=9898"
+    environment:
+      - NODE_ENV=production
+      - PORT=9898
+      - TZ=America/Sao_Paulo
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USERNAME=postgres
+      - DB_PASSWORD=postgres
+      - DB_NAME=db-ia
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - REDIRECT_URI=https://api-test.mlgrupo.com.br/auth/google/callback
+      - API_KEY=${API_KEY}
+      - WEBHOOK_URL=https://api-test.mlgrupo.com.br/webhook
+    volumes:
+      - /opt/ia-ts-app/temp:/app/temp:rw
+      - /opt/ia-ts-app/.env:/app/.env:ro
+
+  postgres:
+    image: postgres:14
+    networks:
+      - network_swarm_public
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=db-ia
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+
+networks:
+  network_swarm_public:
+    external: true
+
+volumes:
+  postgres_data:
