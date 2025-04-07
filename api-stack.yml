@@ -44,7 +44,7 @@ services:
       # Google OAuth
       - GOOGLE_CLIENT_ID=1020668841888-m44ns0c4fatagdh47st2ccsj4seaf5o5.apps.googleusercontent.com
       - GOOGLE_CLIENT_SECRET=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
-      - REDIRECT_URI=http://localhost:5173/callback
+      - REDIRECT_URI=https://auth.mlgrupo.com.br/callback
       # API
       - API_KEY=93e7b8b2-4fc7-4c67-9b27-ccf92fe401d3
       - WEBHOOK_URL=https://whk.supercaso.com.br/webhook/33443dbe-b7c2-43c9-901f-aa6b01d503ad
