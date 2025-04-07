@@ -6,7 +6,7 @@ import { TokenManager } from '../../infrastructure/auth/token-manager';
 import { TranscriptionQueue } from '../transcription/transcription-queue';
 
 export class DriveWatcher {
-  private FOLDER_NAME: string = 'meet';
+  private FOLDER_NAME: string = 'Meet Recordings';
   private isScanning: boolean = false; // Adicionado para evitar duplicação
 
   constructor(

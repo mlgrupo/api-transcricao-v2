@@ -25,7 +25,7 @@ services:
       labels:
         - "traefik.enable=true"
         - "traefik.docker.network=network_swarm_public"
-        - "traefik.http.routers.ia-ts-app.rule=Host(`api-test.mlgrupo.com.br`)"
+        - "traefik.http.routers.ia-ts-app.rule=Host(`api-transcricao.mlgrupo.com.br`)"
         - "traefik.http.routers.ia-ts-app.entrypoints=websecure"
         - "traefik.http.routers.ia-ts-app.tls.certresolver=letsencryptresolver"
         - "traefik.http.services.ia-ts-app.loadbalancer.server.port=9898"
@@ -35,23 +35,23 @@ services:
       - TZ=America/Sao_Paulo
 
       # Banco externo
-      - DB_HOST=${DB_HOST}
-      - DB_PORT=${DB_PORT}
-      - DB_USERNAME=${DB_USERNAME}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_NAME=${DB_NAME}
+      - DB_HOST=178.156.151.200
+      - DB_PORT=5432
+      - DB_USERNAME=postgres
+      - DB_PASSWORD=orPHoLdFAsHObWEstaCyCHarI
+      - DB_NAME=GrupoML_prod
 
       # Google OAuth
-      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
-      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-      - REDIRECT_URI=${REDIRECT_URI}
-
+      - GOOGLE_CLIENT_ID=1020668841888-m44ns0c4fatagdh47st2ccsj4seaf5o5.apps.googleusercontent.com
+      - GOOGLE_CLIENT_SECRET=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
+      - REDIRECT_URI=http://localhost:5173/callback
       # API
-      - API_KEY=${X_API_KEY}
-      - WEBHOOK_URL=${WEBHOOK_URL}
+      - API_KEY=93e7b8b2-4fc7-4c67-9b27-ccf92fe401d3
+      - WEBHOOK_URL=https://whk.supercaso.com.br/webhook/33443dbe-b7c2-43c9-901f-aa6b01d503ad
+
     volumes:
       - /opt/ia-ts-app/temp:/app/temp:rw
-      
+
 networks:
   network_swarm_public:
     external: true

@@ -23,7 +23,7 @@ export class TranscriptionQueue {
   ) {
     this.queue = new Map();
     this.processing = new Set();
-    this.maxConcurrentJobs = parseInt(process.env.MAX_CONCURRENT_JOBS || "3", 10);
+    this.maxConcurrentJobs = parseInt("1", 10);
     
     this.logger.info(`Fila de transcrição inicializada com limite de ${this.maxConcurrentJobs} jobs simultâneos`);
   }
