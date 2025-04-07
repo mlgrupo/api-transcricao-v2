@@ -51,8 +51,7 @@ services:
       - WEBHOOK_URL=${WEBHOOK_URL}
     volumes:
       - /opt/ia-ts-app/temp:/app/temp:rw
-      - /opt/ia-ts-app/.env:/app/.env:ro
-
+      
 networks:
   network_swarm_public:
     external: true
