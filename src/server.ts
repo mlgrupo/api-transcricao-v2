@@ -35,6 +35,16 @@ async function startServer() {
     const app = await appPromise;
     await app.initialize();
 
+    // Calcular data limite (1 dia antes da inicialização)
+    const creationDateFilter = new Date();
+    creationDateFilter.setDate(creationDateFilter.getDate() - 1);
+    app.logger.info(`Setting drive watcher threshold date to: ${creationDateFilter.toISOString()}`);
+    if (app.driveWatcher) {
+      app.driveWatcher.setThresholdDate(creationDateFilter);
+    }
+
+    // A lógica para cálculo do threshold date e setThresholdDate chamada em app.driveWatcher já foi configurada.
+
     // Configurar rotas
     setupRoutes(
       expressApp,

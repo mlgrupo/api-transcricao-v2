@@ -29,6 +29,10 @@ export class TranscriptionQueue {
   }
 
   public add(taskId: string, job: QueueJob): void {
+    if (this.queue.has(taskId) || this.processing.has(taskId)) {
+      this.logger.warn("Tarefa já existente na fila ou em processamento", { taskId });
+      return;
+    }
     this.logger.info('Adicionando job à fila', { taskId, ...job });
     this.queue.set(taskId, job);
     this._tryToProcess();
@@ -70,55 +74,23 @@ export class TranscriptionQueue {
 
   private async _process(taskId: string): Promise<void> {
     const job = this.queue.get(taskId);
-    if (!job) return;
-    
+    if (!job) {
+      this.logger.warn("Tarefa não encontrada na fila", { taskId });
+      return;
+    }
+
     const { videoId, webhookUrl, email, folderId } = job;
     this.processing.add(taskId);
     this.queue.delete(taskId);
-    
-    this.logger.info('Job iniciou processamento', { taskId, videoId, email });
-    
+
+    this.logger.info('Iniciando processamento do job', { taskId, videoId, email });
+
     try {
-      this.logger.info('Chamando processVideo com parâmetros:', { videoId, webhookUrl, email });
-      
-      // Processar o vídeo
       await this.videoProcessor.processVideo(videoId, webhookUrl, email, folderId, taskId);
-      
       this.logger.info('✅ Job finalizado com sucesso', { taskId, videoId });
-      
     } catch (error: any) {
-      this.logger.error('❌ Erro no job:', {
-        taskId, videoId, error: error.message, stack: error.stack
-      });
-      
-      if (webhookUrl) {
-        try {
-          await this.webhookService.sendNotification(webhookUrl, {
-            status: 'error',
-            videoId,
-            error: error.message
-          });
-        } catch (webhookError: any) {
-          this.logger.error('Erro ao enviar notificação de webhook:', webhookError.message);
-        }
-      }
-      
-      try {
-        await this.videoRepository.updateStatusVideo(videoId, false);
-      } catch (err: any) {
-        this.logger.error('Erro ao marcar status como falha:', err.message);
-      }
+      this.logger.error('❌ Erro no job', { taskId, videoId, error: error.message });
     } finally {
-      // Limpar arquivos temporários
-      try {
-        await this.videoProcessor.cleanupTempFiles(videoId);
-      } catch (cleanupError: any) {
-        this.logger.error('Erro ao limpar arquivos temporários:', {
-          videoId,
-          error: cleanupError.message
-        });
-      }
-      
       this.processing.delete(taskId);
       this._tryToProcess();
     }

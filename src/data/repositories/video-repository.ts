@@ -80,10 +80,9 @@ export class VideoRepository {
   public async getPendingVideos(limit: number = 5): Promise<Video[]> {
     try {
       return await this.repository.createQueryBuilder("video")
-        .where("video.transcrito = :transcrito AND (video.status IS NULL OR video.status != :status)", { 
-          transcrito: false, 
-          status: "processing" 
-        })
+        .where("video.transcrito = :transcrito", { transcrito: false })
+        .andWhere("video.enfileirado = :enfileirado", { enfileirado: false })
+        .andWhere("(video.status IS NULL OR video.status != :processing)", { processing: "processing" })
         .orderBy("video.dtCriacao", "ASC")
         .limit(limit)
         .getMany();
@@ -92,7 +91,6 @@ export class VideoRepository {
       throw error;
     }
   }
-
   public async markVideoAsQueued(videoId: string): Promise<Video> {
     try {
       const result = await this.repository.createQueryBuilder()

@@ -7,10 +7,9 @@ import { WebhookService } from "../../infrastructure/webhook/webhook-sender";
 import { CollaboratorRepository } from "../../data/repositories/collaborator-repository";
 import { VideoRepository } from "../../data/repositories/video-repository";
 import { TokenManager } from "../../infrastructure/auth/token-manager";
-import { AudioProcessor } from './audio-processor';
+import { AudioProcessor } from "./audio-processor";
 import { DriveService } from "../../core/drive/drive-service";
 import type { TranscriptionProcessor } from "./transcription-processor";
-
 
 export interface ProcessingResult {
   success: boolean;
@@ -44,6 +43,7 @@ export class VideoProcessor {
     ffmpeg.setFfmpegPath(this.ffmpegPath);
     ffmpeg.setFfprobePath(this.ffprobePath);
   }
+  // ... código anterior permanece inalterado ...
 
   public async processVideo(
     videoId: string,
@@ -77,10 +77,10 @@ export class VideoProcessor {
         await this.videoRepository.markVideoAsCorrupted(videoId, errorMsg);
 
         if (webhookUrl) {
-          await this.webhookService.sendNotification(webhookUrl, { 
-            status: "error", 
-            videoId, 
-            error: errorMsg 
+          await this.webhookService.sendNotification(webhookUrl, {
+            status: "error",
+            videoId,
+            error: errorMsg,
           });
         }
 
@@ -88,46 +88,45 @@ export class VideoProcessor {
       }
 
       await fs.mkdir(tempDir, { recursive: true });
-
-      this.logger.info("Obtendo tokens do usuário", { userEmail, tokens: !!tokens });
+      this.logger.info("Obtendo tokens do usuário", {
+        userEmail,
+        tokens: !!tokens,
+      });
       if (!tokens || !tokens.accessToken) {
         throw new Error(`Tokens não encontrados para o usuário ${userEmail}`);
       }
 
-      const oauth2Client = this.tokenManager.createOAuth2Client(tokens.accessToken, tokens.refreshToken);
-
-      // Configurar evento para atualizar tokens
-      oauth2Client.on('tokens', async (updatedTokens) => {
-        this.logger.info('Tokens atualizados automaticamente', { userEmail });
-
+      const oauth2Client = this.tokenManager.createOAuth2Client(
+        tokens.accessToken,
+        tokens.refreshToken
+      );
+      oauth2Client.on("tokens", async (updatedTokens) => {
+        this.logger.info("Tokens atualizados automaticamente", { userEmail });
         const { access_token, refresh_token, expiry_date } = updatedTokens;
         await this.tokenManager.handleTokenUpdate(userEmail, tokens!, {
           access_token,
           refresh_token,
           expiry_date,
-        } as any
-      );
+        } as any);
       });
 
       const drive = google.drive({ version: "v3", auth: oauth2Client });
-
-      // Obter informações sobre o arquivo
       const fileInfo = await drive.files.get({
         fileId: videoId,
         fields: "name,parents",
       });
 
-
       const originalFileName = fileInfo.data.name!;
       const fileParents = fileInfo.data.parents || [];
-      originalFolderPath = folderId || (fileParents.length > 0 ? fileParents[0] : null);
+      originalFolderPath =
+        folderId || (fileParents.length > 0 ? fileParents[0] : null);
 
       this.logger.info("Iniciando download do vídeo", {
         videoId,
         fileName: originalFileName,
         folderId: originalFolderPath,
       });
-      
+
       await this.driveService.downloadVideo(drive, videoId, videoPath);
       this.logger.info("Download do vídeo concluído", { videoId });
 
@@ -140,39 +139,48 @@ export class VideoProcessor {
       this.logger.info("Iniciando transcrição", { videoId });
       let transcription: string;
       try {
-        transcription = await this.transcriptionProcessor.transcribeAudio(audioPath, videoId);
+        transcription = await this.transcriptionProcessor.transcribeAudio(
+          audioPath,
+          videoId
+        );
         this.logger.info("Transcrição concluída", { videoId });
       } catch (transcriptionError: any) {
-        this.logger.error("Erro na transcrição, tentando abordagem alternativa", { 
-          videoId, 
-          error: transcriptionError.message 
-        });
-        
-        // Fallback para transcrição
-        transcription = "Não foi possível transcrever este vídeo automaticamente. " +
-                        "Por favor, revise manualmente o conteúdo.";
-        
-        // Continue with fallback text instead of failing
+        this.logger.error(
+          "Erro na transcrição, tentando abordagem alternativa",
+          {
+            videoId,
+            error: transcriptionError.message,
+          }
+        );
+        transcription =
+          "Não foi possível transcrever este vídeo automaticamente. Por favor, revise manualmente o conteúdo.";
       }
 
-      // Log de conclusão de transcrição
-      await this.logger.info(`✅ Transcrição concluída para o vídeo ${videoId}`, {
-        videoId,
-        userEmail,
-        transcription,
-      });
+      await this.logger.info(
+        `✅ Transcrição concluída para o vídeo ${videoId}`,
+        {
+          videoId,
+          userEmail,
+          transcription,
+        }
+      );
 
       let transcriptionDocFileName: string;
       if (originalFolderPath) {
-        const baseFileName = path.basename(originalFileName, path.extname(originalFileName));
+        const baseFileName = path.basename(
+          originalFileName,
+          path.extname(originalFileName)
+        );
         transcriptionDocFileName = `${baseFileName}.doc`;
 
-        this.logger.info("Criando pasta no Google Drive para o vídeo e transcrição", {
-          parentFolder: originalFolderPath,
-          newFolderName: baseFileName,
-        });
+        this.logger.info(
+          "Criando pasta no Google Drive para o vídeo e transcrição",
+          {
+            parentFolder: originalFolderPath,
+            newFolderName: baseFileName,
+          }
+        );
 
-        // Criar pasta no Google Drive
         const driveFolderResponse = await drive.files.create({
           requestBody: {
             name: baseFileName,
@@ -187,25 +195,34 @@ export class VideoProcessor {
           folderId: newDriveFolderId,
         });
 
-        // Mover vídeo para a pasta
         this.logger.info("Movendo vídeo para a nova pasta no Google Drive", {
           videoId,
           newDriveFolderId,
           originalFolderPath,
         });
+
+        const moved = await this.driveService.moveFile(
+          drive,
+          videoId,
+          newDriveFolderId,
+          originalFolderPath || ""
+        );
+        this.logger.info("Vídeo movido para a nova pasta no Google Drive", {
+          videoId,
+          newDriveFolderId,
+        });
+
         await drive.files.update({
           fileId: videoId,
           addParents: newDriveFolderId,
           removeParents: originalFolderPath,
           fields: "id, parents",
         });
-        
         this.logger.info("Vídeo movido para a nova pasta no Google Drive", {
           videoId,
           newDriveFolderId,
         });
 
-        // Upload da transcrição
         this.logger.info("Enviando transcrição (DOC) para o Google Drive", {
           folderId: newDriveFolderId,
           fileName: transcriptionDocFileName,
@@ -222,17 +239,19 @@ export class VideoProcessor {
             body: transcription,
           },
         });
-        
-        this.logger.info("Transcrição (DOC) enviada para o Google Drive com sucesso");
+
+        this.logger.info(
+          "Transcrição (DOC) enviada para o Google Drive com sucesso"
+        );
       }
 
-      // Enviar webhook com sucesso
+      // Enviar notificação via webhook
       transcriptionDocFileName = `${videoId}.doc`;
       if (webhookUrl) {
         this.logger.info("Enviando notificação webhook com sucesso", {
           transcriptionDocFileName,
         });
-        
+
         await this.webhookService.sendNotification(webhookUrl, {
           status: "success",
           transcription,
@@ -240,16 +259,15 @@ export class VideoProcessor {
           docFileName: transcriptionDocFileName,
         });
       }
-      
-      await this.cleanupTempFiles(audioPath);
-      this.videoRepository.markVideoAsCompleted(videoId);
+
+      // *** Ajuste aqui: usar videoId em vez de audioPath para a limpeza dos arquivos temporários ***
+      await this.cleanupTempFiles(videoId);
+      await this.videoRepository.markVideoAsCompleted(videoId);
 
       return {
         success: true,
         transcription,
       };
-
-
     } catch (error: any) {
       this.logger.error("Erro no processamento do vídeo:", {
         error: error.message,
@@ -272,7 +290,7 @@ export class VideoProcessor {
           videoId,
           error: error.message,
         });
-        
+
         await this.videoRepository.markVideoAsCorrupted(videoId, error.message);
       }
 
@@ -288,7 +306,7 @@ export class VideoProcessor {
         this.logger.info("Limpando arquivos temporários após erro...", {
           videoId,
         });
-        
+        // Aqui permanece videoId, que é o identificador correto para cleanup
         return {
           success: false,
           error: error.message,
@@ -296,7 +314,6 @@ export class VideoProcessor {
           audioPath,
           alreadyUploaded: true,
         };
-        
       } catch (cleanupError: any) {
         this.logger.error("Erro ao limpar arquivos temporários:", {
           error: cleanupError,
@@ -306,55 +323,61 @@ export class VideoProcessor {
           status: "error",
           videoId,
           error: cleanupError.message,
-          message: "Erro ao limpar arquivos temporários, cuidado com o acumulo de pastas",
+          message:
+            "Erro ao limpar arquivos temporários, cuidado com o acumulo de pastas",
         });
+      } finally {
+        await this.cleanupTempFiles(videoId);
       }
-
       return { success: false, error: error.message };
     }
   }
-  
-  public async cleanupTempFiles(VideoIdAndAudioId: string): Promise<void> {
-    if (!VideoIdAndAudioId) return;
-    
-    const tempDir = path.join(process.cwd(), 'temp');
-    const videoFolderPath = path.join(tempDir, String(VideoIdAndAudioId));
-    const videoPath = path.join(tempDir, `${VideoIdAndAudioId}.mp4`);
-    const audioPath = path.join(tempDir, `${VideoIdAndAudioId}.mp3`);
-    const possibleDocPath = path.join(tempDir, `${VideoIdAndAudioId}.doc`);
-    
-    this.logger.info('Limpando arquivos temporários', { VideoIdAndAudioId });
-    
-    // Lista de arquivos para tentar remover
+
+  public async cleanupTempFiles(identifier: string): Promise<void> {
+    if (!identifier) return;
+
+    const tempDir = path.join(process.cwd(), "temp");
+    const videoFolderPath = path.join(tempDir, identifier);
+    const videoPath = path.join(tempDir, `${identifier}.mp4`);
+    const audioPath = path.join(tempDir, `${identifier}.mp3`);
+    const possibleDocPath = path.join(tempDir, `${identifier}.doc`);
+
+    this.logger.info("Limpando arquivos temporários", { identifier });
+
     const filesToRemove = [videoPath, audioPath, possibleDocPath];
-    
-    // Remover arquivos individuais
     for (const file of filesToRemove) {
       try {
-        const exists = await fs.access(file).then(() => true).catch(() => false);
+        const exists = await fs
+          .access(file)
+          .then(() => true)
+          .catch(() => false);
         if (exists) {
           await fs.unlink(file);
-          this.logger.info('Arquivo temporário removido', { file });
+          this.logger.info("Arquivo temporário removido", { file });
         }
       } catch (err: any) {
-        this.logger.warn('Não foi possível remover arquivo temporário', { 
-          file, 
-          error: err.message 
+        this.logger.warn("Não foi possível remover arquivo temporário", {
+          file,
+          error: err.message,
         });
       }
     }
-    
-    // Remover diretório do vídeo se existir
+
     try {
-      const exists = await fs.access(videoFolderPath).then(() => true).catch(() => false);
+      const exists = await fs
+        .access(videoFolderPath)
+        .then(() => true)
+        .catch(() => false);
       if (exists) {
         await fs.rm(videoFolderPath, { recursive: true, force: true });
-        this.logger.info('Pasta temporária removida', { folder: videoFolderPath });
+        this.logger.info("Pasta temporária removida", {
+          folder: videoFolderPath,
+        });
       }
     } catch (err: any) {
-      this.logger.warn('Não foi possível remover pasta temporária', { 
-        folder: videoFolderPath, 
-        error: err.message 
+      this.logger.warn("Não foi possível remover pasta temporária", {
+        folder: videoFolderPath,
+        error: err.message,
       });
     }
   }

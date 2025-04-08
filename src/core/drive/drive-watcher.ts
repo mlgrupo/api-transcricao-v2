@@ -8,6 +8,7 @@ import { TranscriptionQueue } from '../transcription/transcription-queue';
 export class DriveWatcher {
   private FOLDER_NAME: string = 'Meet Recordings';
   private isScanning: boolean = false; // Adicionado para evitar duplicação
+  private thresholdDate?: string; // nova propriedade para armazenar a data limite
 
   constructor(
     private logger: Logger,
@@ -16,6 +17,12 @@ export class DriveWatcher {
     private tokenManager: TokenManager,
     private transcriptionQueue: TranscriptionQueue
   ) {}
+
+  // Novo método para setar a data limite
+  public setThresholdDate(threshold: Date): void {
+    this.thresholdDate = threshold.toISOString();
+    this.logger.info(`Threshold date set to: ${this.thresholdDate}`);
+  }
 
   /**
    * Escaneia pastas de todos os usuários procurando por vídeos para transcever
@@ -87,9 +94,13 @@ export class DriveWatcher {
 
           const folderId = folderRes.data.files[0].id;
 
-          // Buscar vídeos dentro da pasta "meet"
+          // Modificar a query para filtrar vídeos com createdTime >= thresholdDate (se definida)
+          let query = `'${folderId}' in parents and mimeType contains 'video/' and trashed = false`;
+          if (this.thresholdDate) {
+            query += ` and createdTime >= '${this.thresholdDate}'`;
+          }
           const videosRes = await drive.files.list({
-            q: `'${folderId}' in parents and mimeType contains 'video/' and trashed = false`,
+            q: query,
             fields: 'files(id, name, mimeType, createdTime, modifiedTime, parents)'
           });
 
@@ -116,15 +127,18 @@ export class DriveWatcher {
             userId
           );
 
-          if (!savedVideos || savedVideos.length === 0) {
-            this.logger.info(`Nenhum vídeo novo encontrado para ${email}`);
+          // Filtrar vídeos que já foram processados
+          const unprocessedVideos = savedVideos.filter(video => !video.transcrito && !video.enfileirado);
+
+          if (unprocessedVideos.length === 0) {
+            this.logger.info(`Nenhum vídeo novo ou pendente encontrado para ${email}`);
             continue;
           }
 
-          this.logger.info(`🆕 ${savedVideos.length} novos vídeos encontrados para ${email}`);
+          this.logger.info(`🆕 ${unprocessedVideos.length} novos vídeos encontrados para ${email}`);
 
           // Enfileirar vídeos para transcrição
-          for (const video of savedVideos) {
+          for (const video of unprocessedVideos) {
             if (!video.userEmail) {
               this.logger.error(`Email é obrigatório para enfileirar o vídeo ${video.videoId}`);
               continue; // Pula para o próximo vídeo

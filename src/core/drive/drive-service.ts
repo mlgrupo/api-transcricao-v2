@@ -61,7 +61,7 @@ export class DriveService {
           await new Promise<void>((resolve, reject) => {
             const timeout = setTimeout(() => {
               reject(new Error('Timeout de download excedido'));
-            }, 30 * 60 * 1000);
+            }, 40 * 60 * 1000); // timeout ajustado para 40 minutos
             
             response.data
               .on('data', (chunk: Buffer) => {
@@ -135,15 +135,19 @@ export class DriveService {
   public async moveFile(drive: any, fileId: string, addParents: string, removeParents: string): Promise<void> {
     try {
       this.logger.info('Movendo arquivo no Google Drive', { fileId, addParents, removeParents });
-      await drive.files.update({
+      const result = await drive.files.update({
         fileId,
         addParents,
         removeParents,
-        fields: 'id, parents'
+        fields: 'id, parents',
       });
+      
+      if(!result.data) {
+        throw new Error('Não foi possível mover o arquivo');
+      }
       this.logger.info('Arquivo movido com sucesso', { fileId });
     } catch (error: any) {
-      this.logger.error('Erro ao mover arquivo no Google Drive:', { error: error.message });
+      this.logger.error('Erro ao mover arquivo no Google Drive:', { error: error.message, fileId });
       throw error;
     }
   }
