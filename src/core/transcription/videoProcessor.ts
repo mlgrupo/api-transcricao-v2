@@ -128,7 +128,7 @@ export class VideoProcessor {
         folderId: originalFolderPath,
       });
 
-      const originalVideoFileName = originalFileName.split('.mp4').slice(0, -1).join('.');
+      let originalVideoFileName = originalFileName.split('.mp4').slice(0, -1).join('.');
 
       await this.driveService.downloadVideo(drive, videoId, videoPath);
       this.logger.info("Download do vídeo concluído", { videoId });
@@ -168,27 +168,36 @@ export class VideoProcessor {
         }
       );
 
-      let transcriptionDocFileName: string;
+      let transcriptionDocFileName;
       if (originalFolderPath) {
-        const baseFileName = path.basename(
-          originalFileName,
-          path.extname(originalFileName)
-        );
-        transcriptionDocFileName = `${originalVideoFileName}.doc`;
-
-        console.log("transcriptionDocFileName", baseFileName)
-
+        // Extrair o nome base do arquivo corretamente
+        const fileExtension = originalFileName.toLowerCase().endsWith('.mp4') ? '.mp4' : '';
+        const baseFileName = fileExtension ? 
+          originalFileName.slice(0, -fileExtension.length) : 
+          originalFileName;
+        
+        // Define o nome do arquivo de transcrição mantendo o nome original
+        transcriptionDocFileName = `${baseFileName}.doc`;
+        
+        // Sanitiza apenas caracteres inválidos, mantendo o máximo possível do nome original
+        const sanitizedFolderName = baseFileName
+          .replace(/[\/\\:*?"<>|]/g, '-')
+          .trim();
+        
         this.logger.info(
           "Criando pasta no Google Drive para o vídeo e transcrição",
           {
             parentFolder: originalFolderPath,
-            newFolderName: baseFileName,
+            newFolderName: sanitizedFolderName,
+            originalFileName: originalFileName,
+            baseFileName: baseFileName
           }
         );
 
         const driveFolderResponse = await drive.files.create({
           requestBody: {
-            name: transcriptionDocFileName,
+            // usar o nome sanitizado para a pasta
+            name: sanitizedFolderName,
             mimeType: "application/vnd.google-apps.folder",
             parents: [originalFolderPath],
           },
@@ -200,13 +209,7 @@ export class VideoProcessor {
           folderId: newDriveFolderId,
         });
 
-        this.logger.info("Movendo vídeo para a nova pasta no Google Drive", {
-          videoId,
-          newDriveFolderId,
-          originalFolderPath,
-        });
-
-
+        // enviar transcrição (DOC) para a nova pasta com nome correto
         this.logger.info("Enviando transcrição (DOC) para o Google Drive", {
           folderId: newDriveFolderId,
           fileName: transcriptionDocFileName,
@@ -230,7 +233,6 @@ export class VideoProcessor {
       }
 
       // Enviar notificação via webhook
-      transcriptionDocFileName = `${videoId}.doc`;
       if (webhookUrl) {
         this.logger.info("Enviando notificação webhook com sucesso", {
           transcriptionDocFileName,
