@@ -240,6 +240,7 @@ export class VideoProcessor {
           status: "success",
           transcription,
           videoId,
+          userEmail,
           docFileName: transcriptionDocFileName,
         });
       }
