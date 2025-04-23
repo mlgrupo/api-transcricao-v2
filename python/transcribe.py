@@ -39,7 +39,7 @@ def split_audio_streaming(file_path, chunk_duration_ms=5 * 60 * 1000):
 def transcribe_audio(audio_path):
     try:
         text_processor = basic_text_processor()
-        model = whisper.load_model("base")  # Alterar para um modelo maior, se necessário
+        model = whisper.load_model("large")  # Alterar para um modelo maior, se necessário
 
         full_text = ""
         chunk_count = 0

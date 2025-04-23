@@ -57,7 +57,6 @@ export class VideoProcessor {
     const videoFolderPath = path.join(tempDir, videoId);
     const videoPath = path.join(tempDir, `${videoId}.mp4`);
     const audioPath = path.join(tempDir, `${videoId}.mp3`);
-    let transcriptionFilePath: string | null = null;
     let originalFolderPath: string | null = null;
 
     await fs.mkdir(videoFolderPath, { recursive: true });
@@ -80,7 +79,7 @@ export class VideoProcessor {
           await this.webhookService.sendNotification(webhookUrl, {
             status: "error",
             videoId,
-            error: errorMsg,
+            error: errorMsg,  
           });
         }
 
