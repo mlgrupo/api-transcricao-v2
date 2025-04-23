@@ -115,6 +115,8 @@ export class VideoProcessor {
         fields: "name,parents",
       });
 
+
+
       const originalFileName = fileInfo.data.name!;
       const fileParents = fileInfo.data.parents || [];
       originalFolderPath =
@@ -125,6 +127,8 @@ export class VideoProcessor {
         fileName: originalFileName,
         folderId: originalFolderPath,
       });
+
+      const originalVideoFileName = originalFileName.split('.mp4').slice(0, -1).join('.');
 
       await this.driveService.downloadVideo(drive, videoId, videoPath);
       this.logger.info("Download do vídeo concluído", { videoId });
@@ -170,7 +174,9 @@ export class VideoProcessor {
           originalFileName,
           path.extname(originalFileName)
         );
-        transcriptionDocFileName = `${baseFileName}.doc`;
+        transcriptionDocFileName = `${originalVideoFileName}.doc`;
+
+        console.log("transcriptionDocFileName", baseFileName)
 
         this.logger.info(
           "Criando pasta no Google Drive para o vídeo e transcrição",
@@ -182,7 +188,7 @@ export class VideoProcessor {
 
         const driveFolderResponse = await drive.files.create({
           requestBody: {
-            name: baseFileName,
+            name: transcriptionDocFileName,
             mimeType: "application/vnd.google-apps.folder",
             parents: [originalFolderPath],
           },
@@ -200,27 +206,6 @@ export class VideoProcessor {
           originalFolderPath,
         });
 
-        const moved = await this.driveService.moveFile(
-          drive,
-          videoId,
-          newDriveFolderId,
-          originalFolderPath || ""
-        );
-        this.logger.info("Vídeo movido para a nova pasta no Google Drive", {
-          videoId,
-          newDriveFolderId,
-        });
-
-        await drive.files.update({
-          fileId: videoId,
-          addParents: newDriveFolderId,
-          removeParents: originalFolderPath,
-          fields: "id, parents",
-        });
-        this.logger.info("Vídeo movido para a nova pasta no Google Drive", {
-          videoId,
-          newDriveFolderId,
-        });
 
         this.logger.info("Enviando transcrição (DOC) para o Google Drive", {
           folderId: newDriveFolderId,

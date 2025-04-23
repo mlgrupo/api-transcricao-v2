@@ -1,9 +1,6 @@
-import { google } from 'googleapis';
 import fs from 'fs/promises';
 import { createWriteStream } from 'fs';
 import path from 'path';
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import { Logger } from '../../utils/logger';
 
 export class DriveService {
