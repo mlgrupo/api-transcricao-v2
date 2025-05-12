@@ -36,8 +36,7 @@ class TextProcessingRules:
         'pq': 'porque',
         'mto': 'muito',
         '100%': 'cem por cento',
-        '1%': 'um por cento',
-        'oakunta': 'pergunta'     
+        '1%': 'um por cento'
     })
     # Palavras que devem ser capitalizadas
     capitalize_words: List[str] = field(default_factory=lambda: [
