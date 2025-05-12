@@ -49,7 +49,7 @@ services:
       - X_API_KEY=6e0c6c5c-31f3-4bf4-aabc-71a1d6fb7f7a
       - WEBHOOK_URL=https://whk.supercaso.com.br/webhook/status-transcricao
       - FOLDER_NAME_GRAVACAO=Gravação
-      - FOLDER_NAME_TRANSCRICAO=Transcricão
+      - FOLDER_NAME_TRANSCRICAO=Transcrição
       - ROOT_FOLDER_NAME=Meet Recordings
 
     volumes:
