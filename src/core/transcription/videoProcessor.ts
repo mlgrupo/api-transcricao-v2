@@ -26,6 +26,9 @@ export class VideoProcessor {
   private ffmpegPath: string;
   private ffprobePath: string;
 
+  private folderNameGravacao: string = process.env.FOLDER_NAME_GRAVACAO || "Gravacao";
+  private folderNameTranscricao: string = process.env.FOLDER_NAME_TRANSCRICAO || 'Transcricao';
+  private rootFolderName: string = process.env.ROOT_FOLDER_NAME || 'Meet Recordings';
   constructor(
     private logger: Logger,
     private webhookService: WebhookService,
@@ -79,7 +82,7 @@ export class VideoProcessor {
           await this.webhookService.sendNotification(webhookUrl, {
             status: "error",
             videoId,
-            error: errorMsg,  
+            error: errorMsg,
           });
         }
 
@@ -115,8 +118,6 @@ export class VideoProcessor {
         fields: "name,parents",
       });
 
-
-
       const originalFileName = fileInfo.data.name!;
       const fileParents = fileInfo.data.parents || [];
       originalFolderPath =
@@ -127,8 +128,6 @@ export class VideoProcessor {
         fileName: originalFileName,
         folderId: originalFolderPath,
       });
-
-      let originalVideoFileName = originalFileName.split('.mp4').slice(0, -1).join('.');
 
       await this.driveService.downloadVideo(drive, videoId, videoPath);
       this.logger.info("Download do vídeo concluído", { videoId });
@@ -172,18 +171,20 @@ export class VideoProcessor {
       if (originalFolderPath) {
         // Extrair o nome base do arquivo corretamente
         const fileExtension = originalFileName.toLowerCase().endsWith('.mp4') ? '.mp4' : '';
-        const baseFileName = fileExtension ? 
-          originalFileName.slice(0, -fileExtension.length) : 
-          originalFileName;
-        
-        // Define o nome do arquivo de transcrição mantendo o nome original
-        transcriptionDocFileName = `${baseFileName}.doc`;
-        
+        const baseFileName = fileExtension
+          ? originalFileName.slice(0, -fileExtension.length)
+          : originalFileName;
+
+        // Define o nome do arquivo de transcrição mantendo o nome original,
+        // adicionando "transcrição" antes da extensão .doc
+        transcriptionDocFileName = `${baseFileName} transcrição.doc`;
+
+        console.log("Nome do arquivo depois de adicionar 'transcrição':", transcriptionDocFileName);
+
         // Sanitiza apenas caracteres inválidos, mantendo o máximo possível do nome original
-        const sanitizedFolderName = baseFileName
+        let sanitizedFolderName = baseFileName
           .replace(/[\/\\:*?"<>|]/g, '-')
           .trim();
-        
         this.logger.info(
           "Criando pasta no Google Drive para o vídeo e transcrição",
           {
@@ -193,32 +194,56 @@ export class VideoProcessor {
             baseFileName: baseFileName
           }
         );
+        // Verificar e criar as pastas necessárias
+        const getRootFolderId = await this.driveService.checkFolderHasCreated(this.rootFolderName, drive);
 
-        const driveFolderResponse = await drive.files.create({
-          requestBody: {
-            // usar o nome sanitizado para a pasta
-            name: sanitizedFolderName,
-            mimeType: "application/vnd.google-apps.folder",
-            parents: [originalFolderPath],
-          },
-          fields: "id",
-        });
+        // 1. Verificar/criar pasta raiz (Meet)
+        let rootFolderId;
+        if (getRootFolderId === null) {
+          this.logger.info(`Pasta raiz '${this.rootFolderName}' não existe, criando...`);
+          // Criar na raiz do Google Drive (My Drive)
+          rootFolderId = await this.driveService.createFolder(drive, this.rootFolderName, 'root');
+          this.logger.info(`Pasta raiz '${this.rootFolderName}' criada com ID: ${rootFolderId}`);
+        } else {
+          rootFolderId = getRootFolderId.folderId;
+          this.logger.info(`Pasta raiz '${this.rootFolderName}' encontrada com ID: ${rootFolderId}`);
+        }
 
-        const newDriveFolderId = driveFolderResponse.data.id!;
-        this.logger.info("Pasta criada no Google Drive", {
-          folderId: newDriveFolderId,
-        });
+        // 2. Verificar/criar pasta de gravação
+        let gravacaoFolderId;
+        const checkIfFolderGravacaoExists = await this.driveService.checkFolderHasCreated(this.folderNameGravacao, drive);
+        if (checkIfFolderGravacaoExists === null) {
+          this.logger.info(`Pasta '${this.folderNameGravacao}' não existe, criando...`);
+          gravacaoFolderId = await this.driveService.createFolder(drive, this.folderNameGravacao, rootFolderId);
+          this.logger.info(`Pasta '${this.folderNameGravacao}' criada com ID: ${gravacaoFolderId}`);
+        } else {
+          gravacaoFolderId = checkIfFolderGravacaoExists.folderId;
+          this.logger.info(`Pasta '${this.folderNameGravacao}' encontrada com ID: ${gravacaoFolderId}`);
+        }
 
-        // enviar transcrição (DOC) para a nova pasta com nome correto
-        this.logger.info("Enviando transcrição (DOC) para o Google Drive", {
-          folderId: newDriveFolderId,
+        // 3. Verificar/criar pasta de transcrição
+        let transcricaoFolderId;
+        const createFolderTranscricao = await this.driveService.checkFolderHasCreated(this.folderNameTranscricao, drive);
+        if (createFolderTranscricao === null) {
+          this.logger.info(`Pasta '${this.folderNameTranscricao}' não existe, criando...`);
+          transcricaoFolderId = await this.driveService.createFolder(drive, this.folderNameTranscricao, rootFolderId);
+          this.logger.info(`Pasta '${this.folderNameTranscricao}' criada com ID: ${transcricaoFolderId}`);
+        } else {
+          transcricaoFolderId = createFolderTranscricao.folderId;
+          this.logger.info(`Pasta '${this.folderNameTranscricao}' encontrada com ID: ${transcricaoFolderId}`);
+        }
+
+        // Enviar transcrição diretamente para a pasta de transcrição
+        this.logger.info("Enviando transcrição (DOC) para pasta de transcrição", {
+          folderId: transcricaoFolderId,
           fileName: transcriptionDocFileName,
         });
 
+        // criando dentro da pasta de transcricao o file de transcricao
         await drive.files.create({
           requestBody: {
             name: transcriptionDocFileName,
-            parents: [newDriveFolderId],
+            parents: [transcricaoFolderId],
             mimeType: "application/msword",
           },
           media: {
@@ -226,6 +251,28 @@ export class VideoProcessor {
             body: transcription,
           },
         });
+
+        this.logger.info("Transcrição (DOC) enviada para o Google Drive com sucesso");
+
+        // Se quiser copiar o vídeo original para a pasta de gravação
+        if (originalFolderPath !== gravacaoFolderId) {
+          this.logger.info("Copiando vídeo original para a pasta de gravação", {
+            videoId,
+            destFolder: gravacaoFolderId
+          });
+
+          // Mover o vídeo original para a pasta de gravação (gravacaoFolderId)
+          await drive.files.update({
+            fileId: videoId,
+            addParents: gravacaoFolderId,
+            removeParents: originalFolderPath,
+            requestBody: {
+              name: originalFileName,
+            },
+          });
+
+          this.logger.info("Vídeo copiado para a pasta de gravação com sucesso");
+        }
 
         this.logger.info(
           "Transcrição (DOC) enviada para o Google Drive com sucesso"

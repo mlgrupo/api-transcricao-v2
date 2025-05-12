@@ -14,6 +14,9 @@ export class Collaborator {
   @Column({ nullable: true, type: "varchar" })
   picture?: string;
 
+  @Column({ nullable: true, type: "varchar" })
+  folderRootName?: string;
+
   @CreateDateColumn({ name: "created_at" })
   createdAt!: Date;
 

@@ -8,6 +8,7 @@ export class CollaboratorRepository {
   private repository: Repository<Collaborator>;
   private credentialRepository: Repository<Credential>;
   private logger: Logger;
+  private FOLDER_ROOT_NAME: string = process.env.ROOT_FOLDER_NAME || 'Meetings Records';
 
   constructor(logger: Logger) {
     this.repository = AppDataSource.getRepository(Collaborator);
@@ -70,6 +71,7 @@ export class CollaboratorRepository {
         collaborator.name = credentialData.name;
         collaborator.email = credentialData.email;
         collaborator.picture = credentialData.picture;
+        collaborator.folderRootName = this.FOLDER_ROOT_NAME;
         
         // Salvar colaborador ANTES de criar credenciais
         await this.repository.save(collaborator);

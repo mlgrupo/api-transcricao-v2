@@ -6,7 +6,7 @@ import { TokenManager } from '../../infrastructure/auth/token-manager';
 import { TranscriptionQueue } from '../transcription/transcription-queue';
 
 export class DriveWatcher {
-  private FOLDER_NAME: string = 'Meet Recordings';
+  private FOLDER_NAME: string = process.env.ROOT_FOLDER_NAME || 'Meet Recordings';
   private isScanning: boolean = false; // Adicionado para evitar duplicação
   private thresholdDate?: string; // nova propriedade para armazenar a data limite
 
@@ -16,7 +16,7 @@ export class DriveWatcher {
     private videoService: VideoService,
     private tokenManager: TokenManager,
     private transcriptionQueue: TranscriptionQueue
-  ) {}
+  ) { }
 
   // Novo método para setar a data limite
   public setThresholdDate(threshold: Date): void {
@@ -38,7 +38,7 @@ export class DriveWatcher {
       // Obter todos os colaboradores ativos
       const collaborators = await this.collaboratorService.getAllActiveCollaborators();
       this.logger.info(`Encontrados ${collaborators.length} colaboradores ativos`);
-      
+
       for (const collaborator of collaborators) {
         const { userId, email, accessToken, refreshToken, expiryDate } = collaborator;
         this.logger.info(`➡️ Processando colaborador: ${email}`);
@@ -54,14 +54,14 @@ export class DriveWatcher {
             if (!refreshToken) {
               throw new Error(`Usuário ${email} está sem refresh_token!`);
             }
-            
+
             this.logger.info(`Token expirado para ${email}, renovando...`);
             const refreshed = await this.tokenManager.refreshTokenIfNeeded(email);
-            
+
             if (!refreshed) {
               throw new Error(`Falha ao renovar token para ${email}`);
             }
-            
+
             // Buscar tokens atualizados
             const updatedTokens = await this.collaboratorService.getUserTokens(email);
             if (updatedTokens) {
@@ -71,14 +71,14 @@ export class DriveWatcher {
               }
             }
           }
-          
+
           // Criar cliente OAuth2 com os tokens atualizados
           const oauth2Client = this.tokenManager.createOAuth2Client(currentAccessToken, currentRefreshToken);
           const drive = google.drive({ version: 'v3', auth: oauth2Client });
 
           // Escanear pasta 'meet' (ou qualquer nome configurado)
           this.logger.info(`Escaneando pasta '${this.FOLDER_NAME}' para o usuário: ${email}`);
-          
+
           // Buscar pasta "meet"
           const folderRes = await drive.files.list({
             q: `name='${this.FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed = false`,
@@ -143,10 +143,10 @@ export class DriveWatcher {
               this.logger.error(`Email é obrigatório para enfileirar o vídeo ${video.videoId}`);
               continue; // Pula para o próximo vídeo
             }
-          
+
             // Usar o ID do usuário + ID do vídeo como identificador único da tarefa
             const taskId = `${userId}-${video.videoId}`;
-            
+
             // Registrar vídeo como enfileirado no banco
             try {
               await this.videoService.markVideoAsQueued(video.videoId);
@@ -154,21 +154,21 @@ export class DriveWatcher {
               this.logger.error(`Erro ao marcar vídeo ${video.videoId} como enfileirado:`, error);
               // Continua mesmo com erro, para tentar enfileirar
             }
-            
+
             // Adicionar à fila de transcrição
             this.transcriptionQueue.add(
               taskId,
               {
                 videoId: video.videoId,
                 webhookUrl: process.env.WEBHOOK_URL || '',
-                email: video.userEmail, 
+                email: video.userEmail,
                 folderId: video.pastaId
               }
             );
-            
+
             this.logger.info(`🎬 Vídeo enfileirado para transcrição: ${video.videoName} (${video.videoId})`);
           }
-          
+
         } catch (error: any) {
           this.logger.error(`Erro ao escanear pastas para ${email}:`, {
             error: error.message,
@@ -197,19 +197,19 @@ export class DriveWatcher {
 
       // Usar estrutura similar à função principal, mas para um único usuário
       const { userId, accessToken, refreshToken } = credential;
-      
+
       // Verificar e atualizar tokens se necessário
       await this.tokenManager.refreshTokenIfNeeded(email);
-      
+
       // Reobter credenciais após possível atualização
       const updatedCredential = await this.collaboratorService.getUserTokens(email);
       if (!updatedCredential) return false;
-      
+
       const oauth2Client = this.tokenManager.createOAuth2Client(
-        updatedCredential.accessToken, 
+        updatedCredential.accessToken,
         updatedCredential.refreshToken
       );
-      
+
       // Código similar ao método principal para escanear a pasta do usuário
       // ...
 

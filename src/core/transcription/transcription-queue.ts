@@ -24,7 +24,7 @@ export class TranscriptionQueue {
     this.queue = new Map();
     this.processing = new Set();
     this.maxConcurrentJobs = parseInt("1", 10);
-    
+
     this.logger.info(`Fila de transcrição inicializada com limite de ${this.maxConcurrentJobs} jobs simultâneos`);
   }
 
@@ -65,7 +65,7 @@ export class TranscriptionQueue {
     // Pegar primeiros jobs da fila que não estão em processamento
     const availableTasks = Array.from(this.queue.keys())
       .filter(id => !this.processing.has(id));
-      
+
     for (const taskId of availableTasks) {
       if (this.processing.size >= this.maxConcurrentJobs) break;
       this._process(taskId);

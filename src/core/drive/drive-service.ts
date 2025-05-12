@@ -3,33 +3,40 @@ import { createWriteStream } from 'fs';
 import path from 'path';
 import { Logger } from '../../utils/logger';
 
+interface findedFolder {
+  folderId: string;
+  name: string;
+  mimeType: string;
+  parentFolderId: string;
+}
+
 export class DriveService {
-  constructor(private logger: Logger) {}
+  constructor(private logger: Logger) { }
 
   public async downloadVideo(drive: any, videoId: string, outputPath: string): Promise<void> {
     try {
       this.logger.info('Iniciando download de vídeo do Google Drive', { videoId, outputPath });
       const dir = path.dirname(outputPath);
       await fs.mkdir(dir, { recursive: true });
-      
+
       const fileMetadataResponse = await drive.files.get({
         fileId: videoId,
         fields: 'size,name,mimeType'
       });
-      
+
       if (!fileMetadataResponse.data) {
         throw new Error('Não foi possível obter metadados do arquivo');
       }
-      
+
       const { size, name } = fileMetadataResponse.data;
       if (!size || size === '0') {
         throw new Error(`Arquivo vazio no Google Drive: ${name} (${videoId})`);
       }
-      
+
       const dest = createWriteStream(outputPath, { mode: 0o666 });
       let attempts = 0;
       const maxAttempts = 3;
-      
+
       while (attempts < maxAttempts) {
         attempts++;
         try {
@@ -38,11 +45,11 @@ export class DriveService {
             { fileId: videoId, alt: 'media' },
             { responseType: 'stream' }
           );
-          
+
           if (!response.data) {
             throw new Error('Resposta vazia do Google Drive');
           }
-          
+
           let fileSize = parseInt(response.headers['content-length'] || size || '0', 10);
           if (fileSize === 0 && size) {
             fileSize = parseInt(size, 10);
@@ -51,15 +58,15 @@ export class DriveService {
           if (fileSize === 0) {
             throw new Error('Não foi possível determinar o tamanho do arquivo');
           }
-          
+
           let downloadedBytes = 0;
           let lastLoggedPercent = 0;
-          
+
           await new Promise<void>((resolve, reject) => {
             const timeout = setTimeout(() => {
               reject(new Error('Timeout de download excedido'));
             }, 40 * 60 * 1000); // timeout ajustado para 40 minutos
-            
+
             response.data
               .on('data', (chunk: Buffer) => {
                 downloadedBytes += chunk.length;
@@ -87,13 +94,13 @@ export class DriveService {
                 this.logger.error('Erro durante o download:', { error: error.message, videoId });
                 reject(error);
               });
-            
+
             dest.on('error', (error: Error) => {
               clearTimeout(timeout);
               this.logger.error('Erro ao escrever arquivo:', { error: error.message, path: outputPath });
               reject(error);
             });
-            
+
             response.data.pipe(dest);
           });
           return;
@@ -138,8 +145,8 @@ export class DriveService {
         removeParents,
         fields: 'id, parents',
       });
-      
-      if(!result.data) {
+
+      if (!result.data) {
         throw new Error('Não foi possível mover o arquivo');
       }
       this.logger.info('Arquivo movido com sucesso', { fileId });
@@ -166,6 +173,34 @@ export class DriveService {
       this.logger.info('Arquivo enviado com sucesso', { filename });
     } catch (error: any) {
       this.logger.error('Erro ao enviar arquivo para o Google Drive:', { error: error.message });
+      throw error;
+    }
+  }
+  public async checkFolderHasCreated(folderName: string, drive: any): Promise<findedFolder | null> {
+    try {
+      this.logger.info('Verificando se a pasta existe no Google Drive', { folderName });
+
+      const folderRes = await drive.files.list({
+        q: `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed = false`,
+        fields: 'files(id, name, mimeType, createdTime, modifiedTime)',
+        spaces: 'drive',
+      });
+
+      if (!folderRes.data.files || folderRes.data.files.length === 0) {
+        this.logger.warn(`Pasta '${folderName}' não encontrada`);
+        return null;
+      }
+
+      this.logger.info(`Pasta '${folderName}' encontrada`);
+      return {
+        folderId: folderRes.data.files[0].id,
+        name: folderRes.data.files[0].name,
+        mimeType: folderRes.data.files[0].mimeType,
+        parentFolderId: folderRes.data.files[0].parents ? folderRes.data.files[0].parents[0] : null,
+      }
+
+    } catch (error: any) {
+      this.logger.error('Erro ao verificar pasta no Google Drive:', { error: error.message });
       throw error;
     }
   }

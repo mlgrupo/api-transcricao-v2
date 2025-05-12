@@ -18,8 +18,8 @@ def basic_text_processor():
         capitalize_sentences=True,
         fix_spaces=True,
         ensure_final_punctuation=True,
-        normalize_numbers=False,
-        fix_common_errors=False,
+        normalize_numbers=True,
+        fix_common_errors=True,
         normalize_punctuation=True,
         capitalize_words=['Brasil', 'São Paulo', 'Rio de Janeiro'],
         common_replacements={}

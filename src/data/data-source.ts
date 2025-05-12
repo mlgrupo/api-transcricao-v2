@@ -8,12 +8,12 @@ import { ApplicationLog } from "../domain/models/ApplicationLog"; // Importar a 
 dotenv.config();
 export const AppDataSource = new DataSource({
   type: "postgres",
-  host: process.env.DB_HOST || "localhost",
-  port: parseInt(process.env.DB_PORT || "5432"),
-  username: process.env.DB_USERNAME || "root",
-  password: process.env.DB_PASSWORD || "root",
-  database: process.env.DB_NAME || "db-ia",
-  synchronize: false, // Ativar temporariamente para criar tabelas automaticamente
+  host: "168.231.89.37",
+  port: parseInt("5432"),
+  username: "postgres",
+  password: "senhaboa",
+  database:"building",
+  synchronize: true, // Ativar temporariamente para criar tabelas automaticamente
   logging: process.env.NODE_ENV === "development",
   entities: [
     Video,

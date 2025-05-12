@@ -22,6 +22,8 @@ services:
       - REDIRECT_URI=${REDIRECT_URI}
       - API_KEY=${API_KEY}
       - WEBHOOK_URL=${WEBHOOK_URL}
+      - ROOT_FOLDER_NAME=${ROOT_FOLDER_NAME}
+      
     volumes:
       - ./temp:/app/temp
     depends_on:

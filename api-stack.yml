@@ -46,8 +46,9 @@ services:
       - GOOGLE_CLIENT_SECRET=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
       - REDIRECT_URI=https://auth.mlgrupo.com.br/callback
       # API
-      - API_KEY=93e7b8b2-4fc7-4c67-9b27-ccf92fe401d3
-      - WEBHOOK_URL=https://whk.supercaso.com.br/webhook/33443dbe-b7c2-43c9-901f-aa6b01d503ad
+      - X_API_KEY=6e0c6c5c-31f3-4bf4-aabc-71a1d6fb7f7a
+      - WEBHOOK_URL=https://whk.supercaso.com.br/webhook/status-transcricao
+      - ROOT_FOLDER_NAME=Meet Recordings
 
     volumes:
       - /opt/ia-ts-app/temp:/app/temp:rw
