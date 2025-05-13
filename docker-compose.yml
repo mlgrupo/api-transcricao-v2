@@ -1,53 +1,12 @@
-version: '3.8'
-
+#este arquivo é para subir um banco postgres para o ambiente de desenvolvimento
 services:
-  app:
-    build: 
-      context: .
-      dockerfile: Dockerfile
-    image: ia-ts-app:optimized
-    restart: unless-stopped
-    ports:
-      - "9898:9898"
-    environment:
-      - NODE_ENV=production
-      - PORT=9898
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_USERNAME=postgres
-      - DB_PASSWORD=postgres
-      - DB_NAME=db-ia
-      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
-      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-      - REDIRECT_URI=${REDIRECT_URI}
-      - API_KEY=${API_KEY}
-      - WEBHOOK_URL=${WEBHOOK_URL}
-      - ROOT_FOLDER_NAME=${ROOT_FOLDER_NAME}
-      
-    volumes:
-      - ./temp:/app/temp
-    depends_on:
-      - postgres
-    networks:
-      - app-network
-
   postgres:
+    container_name: ambiente_dev
     image: postgres:14
-    restart: unless-stopped
+    restart: always
     environment:
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_USER=postgres
-      - POSTGRES_DB=db-ia
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: db-ia
     ports:
       - "5432:5432"
-    networks:
-      - app-network
-
-networks:
-  app-network:
-    driver: bridge
-
-volumes:
-  postgres-data:

@@ -123,9 +123,7 @@ export class Application {
 
     this.transcriptionQueue = new TranscriptionQueue(
       this.logger,
-      this.videoProcessor,
-      this.webhookService,
-      this.videoRepository
+      this.videoProcessor
     );
 
     this.transcriptionService = new TranscriptionService(
@@ -210,16 +208,16 @@ export class Application {
   private async preloadData(): Promise<void> {
     try {
       this.logger.info('Carregando dados iniciais...');
-      
+
       // Injetar serviço de transcrição no serviço de vídeo para resolver a dependência circular
       if (!this.videoService || !this.transcriptionService) {
         throw new Error('VideoService ou TranscriptionService não foram inicializados corretamente');
       }
-      
+
       // Set transcription service in video service
       this.videoService.setTranscriptionService(this.transcriptionService);
       this.logger.info('✅ TranscriptionService injetado no VideoService');
-      
+
       // Exemplo: Carregar colaboradores para memória
       const collaborators = await this.collaboratorService.getAllActiveCollaborators();
       this.logger.info(`✅ ${collaborators.length} colaboradores ativos carregados.`);
@@ -238,7 +236,7 @@ export class Application {
             try {
               // Marcar como enfileirado
               await this.videoService.markVideoAsQueued(video.videoId);
-              
+
               // Adicionar à fila
               this.transcriptionQueue.add(taskId, {
                 videoId: video.videoId,
@@ -246,7 +244,7 @@ export class Application {
                 email: video.userEmail,
                 folderId: video.pastaId
               });
-              
+
               this.logger.info(`✅ Vídeo pendente enfileirado: ${video.videoId}`);
             } catch (err: any) {
               this.logger.error(`❌ Erro ao enfileirar vídeo pendente ${video.videoId}:`, err);
@@ -266,7 +264,7 @@ export class Application {
   public async shutdown(): Promise<void> {
     try {
       this.logger.info('Encerrando a aplicação...');
-      
+
       // Fechar conexão com o banco de dados
       if (AppDataSource.isInitialized) {
         await AppDataSource.destroy();

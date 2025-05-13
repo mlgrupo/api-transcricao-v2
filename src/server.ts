@@ -1,5 +1,4 @@
 import 'reflect-metadata'; // Adicione esta linha no início
-import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { rateLimit } from 'express-rate-limit';
@@ -42,8 +41,6 @@ async function startServer() {
     if (app.driveWatcher) {
       app.driveWatcher.setThresholdDate(creationDateFilter);
     }
-
-    // A lógica para cálculo do threshold date e setThresholdDate chamada em app.driveWatcher já foi configurada.
 
     // Configurar rotas
     setupRoutes(

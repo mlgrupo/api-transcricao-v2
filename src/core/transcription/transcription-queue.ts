@@ -1,7 +1,5 @@
 import { Logger } from "../../utils/logger";
 import { VideoProcessor } from "./videoProcessor";
-import { WebhookService } from "../../infrastructure/webhook/webhook-sender";
-import { VideoRepository } from "../../data/repositories/video-repository";
 
 interface QueueJob {
   videoId: string;
@@ -18,8 +16,6 @@ export class TranscriptionQueue {
   constructor(
     private logger: Logger,
     private videoProcessor: VideoProcessor,
-    private webhookService: WebhookService,
-    private videoRepository: VideoRepository
   ) {
     this.queue = new Map();
     this.processing = new Set();

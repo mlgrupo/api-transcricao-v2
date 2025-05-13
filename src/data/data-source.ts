@@ -1,19 +1,38 @@
 import { DataSource } from "typeorm";
-import dotenv from "dotenv";
 import { Collaborator } from "../domain/models/Collaborators";
 import { Video } from "../domain/models/Video";
 import { Credential } from "../domain/models/Credentials";
 import { ApplicationLog } from "../domain/models/ApplicationLog"; // Importar a entidade ApplicationLog
+import dotenv from 'dotenv';
 
-dotenv.config();
+const envFile = `.env.${process.env.NODE_ENV ?? 'development'}`;
+
+dotenv.config({ path: envFile });
+// Garantir que todas as variáveis de ambiente necessárias estejam definidas
+const requiredEnvVars = {
+  DB_HOST: process.env.DB_HOST,
+  DB_PORT: parseInt(process.env.DB_PORT ?? "5432"),
+  DB_USERNAME: process.env.DB_USERNAME,
+  DB_PASSWORD: String(process.env.DB_PASSWORD), // Forçar conversão para string
+  DB_DATABASE: process.env.DB_DATABASE
+};
+
+console.log('requiredEnvVars', requiredEnvVars);
+
+// Verificar se a senha está definida
+if (!requiredEnvVars.DB_PASSWORD) {
+  console.error("❌ Erro: DB_PASSWORD não está definida nas variáveis de ambiente");
+  process.exit(1);
+}
+
 export const AppDataSource = new DataSource({
   type: "postgres",
-  host: process.env.DB_HOST || "localhost",
-  port: parseInt(process.env.DB_PORT || "5432"),
-  username: process.env.DB_USERNAME || "root",
-  password: process.env.DB_PASSWORD || "root",
-  database: process.env.DB_NAME || "db-ia",
-  synchronize: false, // Ativar temporariamente para criar tabelas automaticamente
+  host: requiredEnvVars.DB_HOST,
+  port: requiredEnvVars.DB_PORT,
+  username: requiredEnvVars.DB_USERNAME,
+  password: requiredEnvVars.DB_PASSWORD,
+  database: requiredEnvVars.DB_DATABASE,
+  synchronize: true, // Ativar temporariamente para criar tabelas automaticamente
   logging: process.env.NODE_ENV === "development",
   entities: [
     Video,
