@@ -8,7 +8,7 @@ export class CollaboratorRepository {
   private repository: Repository<Collaborator>;
   private credentialRepository: Repository<Credential>;
   private logger: Logger;
-  private FOLDER_ROOT_NAME: string = process.env.ROOT_FOLDER_NAME || 'Meetings Records';
+  private FOLDER_ROOT_NAME: string = process.env.ROOT_FOLDER_NAME || 'Meet Recordings';
 
   constructor(logger: Logger) {
     this.repository = AppDataSource.getRepository(Collaborator);
@@ -26,7 +26,7 @@ export class CollaboratorRepository {
       throw error;
     }
   }
-  
+
   public async getAllActiveCollaborators(): Promise<Credential[]> {
     try {
       return await this.credentialRepository
@@ -58,7 +58,7 @@ export class CollaboratorRepository {
       const existingCredential = await this.credentialRepository.findOne({
         where: { email: credentialData.email }
       });
-      
+
       // Verificar se o colaborador existe, se não existir, criar primeiro
       let collaborator = await this.repository.findOne({
         where: { userId: credentialData.user_id }
@@ -72,7 +72,7 @@ export class CollaboratorRepository {
         collaborator.email = credentialData.email;
         collaborator.picture = credentialData.picture;
         collaborator.folderRootName = this.FOLDER_ROOT_NAME;
-        
+
         // Salvar colaborador ANTES de criar credenciais
         await this.repository.save(collaborator);
         this.logger.info(`Colaborador criado com sucesso para ${credentialData.email}`);
@@ -80,26 +80,26 @@ export class CollaboratorRepository {
 
       if (existingCredential) {
         this.logger.info(`Atualizando credenciais para ${credentialData.email}`);
-        
+
         // Atualizar credenciais existentes
         existingCredential.name = credentialData.name;
         existingCredential.picture = credentialData.picture;
         existingCredential.accessToken = credentialData.access_token;
-        
+
         // Só atualiza o refresh_token se um novo foi fornecido
         if (credentialData.refresh_token) {
           existingCredential.refreshToken = credentialData.refresh_token;
         }
-        
+
         existingCredential.scope = credentialData.scope;
         existingCredential.tokenType = credentialData.token_type;
         existingCredential.expiryDate = credentialData.expiry_date;
         existingCredential.updatedAt = new Date();
-        
+
         return await this.credentialRepository.save(existingCredential);
       } else {
         this.logger.info(`Criando novas credenciais para ${credentialData.email}`);
-        
+
         // Criar novas credenciais
         const credential = new Credential();
         credential.userId = credentialData.user_id;
@@ -111,7 +111,7 @@ export class CollaboratorRepository {
         credential.scope = credentialData.scope;
         credential.tokenType = credentialData.token_type;
         credential.expiryDate = credentialData.expiry_date;
-        
+
         return await this.credentialRepository.save(credential);
       }
     } catch (error: any) {
@@ -142,7 +142,7 @@ export class CollaboratorRepository {
       credential.expiryDate = data.expiry_date;
       credential.scope = data.scope;
       credential.tokenType = data.token_type;
-      
+
       // Verificar se o colaborador já existe, se não existir, criar
       const collaborator = await this.repository.findOne({
         where: { userId: data.user_id }
@@ -158,7 +158,7 @@ export class CollaboratorRepository {
       }
 
       const savedCredential = await this.credentialRepository.save(credential);
-      
+
       return savedCredential;
     } catch (error: any) {
       this.logger.error("Erro ao salvar credenciais:", error);
@@ -173,14 +173,14 @@ export class CollaboratorRepository {
   }): Promise<Credential | null> {
     try {
       const { access_token, refresh_token, expiry_date } = tokens;
-      
+
       // Validar e sanitizar expiry_date
       const validExpiryDate = this.validateExpiryDate(expiry_date);
 
       const result = await this.credentialRepository
         .createQueryBuilder()
         .update(Credential)
-        .set({ 
+        .set({
           accessToken: access_token,
           refreshToken: refresh_token,
           expiryDate: validExpiryDate
@@ -192,7 +192,7 @@ export class CollaboratorRepository {
       if (!result.raw || result.raw.length === 0) {
         throw new Error(`Não foi encontrado registro para o email: ${email}`);
       }
-      
+
       return result.raw[0];
     } catch (error: any) {
       this.logger.error("Erro ao atualizar tokens do usuário:", error);
@@ -216,7 +216,7 @@ export class CollaboratorRepository {
     try {
       const credential = await this.credentialRepository.findOne({
         where: { email },
-        order: { updatedAt: "DESC" }  
+        order: { updatedAt: "DESC" }
       });
       if (!credential) {
         this.logger.warn(`Credenciais não encontradas para o email: ${email}`);
@@ -241,13 +241,13 @@ export class CollaboratorRepository {
       this.logger.warn('Data de expiração ausente, usando valor padrão (1 hora)');
       return Date.now() + (3600 * 1000);
     }
-    
+
     // Se for um valor negativo ou inválido, retorne um valor padrão
     if (isNaN(expiryDate) || expiryDate <= 0) {
       this.logger.warn(`Data de expiração inválida (${expiryDate}), usando valor padrão (1 hora)`);
       return Date.now() + (3600 * 1000);
     }
-    
+
     return expiryDate;
   }
 

@@ -13,7 +13,7 @@ export const AppDataSource = new DataSource({
   username: process.env.DB_USERNAME || "root",
   password: process.env.DB_PASSWORD || "root",
   database: process.env.DB_NAME || "db-ia",
-  synchronize: true, // Ativar temporariamente para criar tabelas automaticamente
+  synchronize: false, // Ativar temporariamente para criar tabelas automaticamente
   logging: process.env.NODE_ENV === "development",
   entities: [
     Video,

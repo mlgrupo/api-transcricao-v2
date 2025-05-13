@@ -176,18 +176,23 @@ export class DriveService {
       throw error;
     }
   }
-  public async checkFolderHasCreated(folderName: string, drive: any): Promise<findedFolder | null> {
+  public async checkFolderHasCreated(folderName: string, drive: any, parentFolderId?: string): Promise<findedFolder | null> {
     try {
-      this.logger.info('Verificando se a pasta existe no Google Drive', { folderName });
+      this.logger.info('Verificando se a pasta existe no Google Drive', { folderName, parentFolderId });
+
+      let query = `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed = false`;
+      if (parentFolderId) {
+        query += ` and '${parentFolderId}' in parents`;
+      }
 
       const folderRes = await drive.files.list({
-        q: `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed = false`,
-        fields: 'files(id, name, mimeType, createdTime, modifiedTime)',
+        q: query,
+        fields: 'files(id, name, mimeType, createdTime, modifiedTime, parents)',
         spaces: 'drive',
       });
 
       if (!folderRes.data.files || folderRes.data.files.length === 0) {
-        this.logger.warn(`Pasta '${folderName}' não encontrada`);
+        this.logger.warn(`Pasta '${folderName}' não encontrada`, { parentFolderId });
         return null;
       }
 
@@ -200,7 +205,7 @@ export class DriveService {
       }
 
     } catch (error: any) {
-      this.logger.error('Erro ao verificar pasta no Google Drive:', { error: error.message });
+      this.logger.error('Erro ao verificar pasta no Google Drive:', { error: error.message, folderName, parentFolderId });
       throw error;
     }
   }

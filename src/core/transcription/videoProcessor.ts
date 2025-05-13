@@ -26,8 +26,8 @@ export class VideoProcessor {
   private ffmpegPath: string;
   private ffprobePath: string;
 
-  private folderNameGravacao: string = process.env.FOLDER_NAME_GRAVACAO || "Gravacao";
-  private folderNameTranscricao: string = process.env.FOLDER_NAME_TRANSCRICAO || 'Transcricao';
+  private folderNameGravacao: string = process.env.FOLDER_NAME_GRAVACAO || "Gravação";
+  private folderNameTranscricao: string = process.env.FOLDER_NAME_TRANSCRICAO || 'Transcrição';
   private rootFolderName: string = process.env.ROOT_FOLDER_NAME || 'Meet Recordings';
   constructor(
     private logger: Logger,
@@ -211,7 +211,7 @@ export class VideoProcessor {
 
         // 2. Verificar/criar pasta de gravação
         let gravacaoFolderId;
-        const checkIfFolderGravacaoExists = await this.driveService.checkFolderHasCreated(this.folderNameGravacao, drive);
+        const checkIfFolderGravacaoExists = await this.driveService.checkFolderHasCreated(this.folderNameGravacao, drive, rootFolderId);
         if (checkIfFolderGravacaoExists === null) {
           this.logger.info(`Pasta '${this.folderNameGravacao}' não existe, criando...`);
           gravacaoFolderId = await this.driveService.createFolder(drive, this.folderNameGravacao, rootFolderId);
@@ -223,7 +223,7 @@ export class VideoProcessor {
 
         // 3. Verificar/criar pasta de transcrição
         let transcricaoFolderId;
-        const createFolderTranscricao = await this.driveService.checkFolderHasCreated(this.folderNameTranscricao, drive);
+        const createFolderTranscricao = await this.driveService.checkFolderHasCreated(this.folderNameTranscricao, drive, rootFolderId);
         if (createFolderTranscricao === null) {
           this.logger.info(`Pasta '${this.folderNameTranscricao}' não existe, criando...`);
           transcricaoFolderId = await this.driveService.createFolder(drive, this.folderNameTranscricao, rootFolderId);
@@ -251,7 +251,6 @@ export class VideoProcessor {
             body: transcription,
           },
         });
-
         this.logger.info("Transcrição (DOC) enviada para o Google Drive com sucesso");
 
         // Se quiser copiar o vídeo original para a pasta de gravação
