@@ -3,6 +3,7 @@ import { Collaborator } from "../domain/models/Collaborators";
 import { Video } from "../domain/models/Video";
 import { Credential } from "../domain/models/Credentials";
 import { ApplicationLog } from "../domain/models/ApplicationLog"; // Importar a entidade ApplicationLog
+import { initializeDevSeed } from "./seed-manager";
 import dotenv from 'dotenv';
 
 const envFile = `.env.${process.env.NODE_ENV ?? 'development'}`;
@@ -45,8 +46,11 @@ export const AppDataSource = new DataSource({
 });
 
 AppDataSource.initialize()
-  .then(() => {
+  .then(async () => {
     console.log('✅ DataSource inicializado com sucesso.');
+    
+    // Inicializa o seed em ambiente de desenvolvimento
+    await initializeDevSeed();
   })
   .catch((error) => {
     console.error('❌ Erro ao inicializar o DataSource:', error);
