@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import { createWriteStream } from 'fs';
 import path from 'path';
 import { Logger } from '../../utils/logger';
+import { IDriveService } from './interfaces/IDriveResources';
 
 interface findedFolder {
   folderId: string;
@@ -10,7 +11,7 @@ interface findedFolder {
   parentFolderId: string;
 }
 
-export class DriveService {
+export class DriveService implements IDriveService {
   constructor(private logger: Logger) { }
 
   public async downloadVideo(drive: any, videoId: string, outputPath: string): Promise<void> {
@@ -116,7 +117,7 @@ export class DriveService {
     }
   }
 
-  public async createFolder(drive: any, folderName: string, parentFolderId: string): Promise<string> {
+  public async createFolder(drive: any, folderName: string, parentFolderId?: string): Promise<string> {
     try {
       this.logger.info(`Criando pasta no Google Drive: ${folderName}`, { parentFolderId });
       const driveFolderResponse = await drive.files.create({
@@ -176,6 +177,8 @@ export class DriveService {
       throw error;
     }
   }
+
+  // esse metodo não é usado para criação de pastas, apenas verificação se a pasta existe
   public async checkFolderHasCreated(folderName: string, drive: any, parentFolderId?: string): Promise<findedFolder | null> {
     try {
       this.logger.info('Verificando se a pasta existe no Google Drive', { folderName, parentFolderId });
@@ -206,6 +209,29 @@ export class DriveService {
 
     } catch (error: any) {
       this.logger.error('Erro ao verificar pasta no Google Drive:', { error: error.message, folderName, parentFolderId });
+      throw error;
+    }
+  }
+
+  public async getFileById (drive: any, fileId: string): Promise<findedFolder | null> {
+    try {
+      this.logger.info('Verificando se o arquivo existe no Google Drive', { fileId });
+      const fileRes = await drive.files.get({ fileId, fields: 'id, name, mimeType, createdTime, modifiedTime, parents' });
+
+      if (!fileRes.data) {
+        this.logger.warn(`Arquivo '${fileId}' não encontrado`, { fileId });
+        return null;
+      }
+      
+      return {
+        folderId: fileRes.data.id,
+        name: fileRes.data.name,
+        mimeType: fileRes.data.mimeType,
+        parentFolderId: fileRes.data.parents ? fileRes.data.parents[0] : null,
+      };
+
+    } catch (error: any) {
+      this.logger.error('Erro ao verificar arquivo no Google Drive:', { error: error.message, fileId });
       throw error;
     }
   }

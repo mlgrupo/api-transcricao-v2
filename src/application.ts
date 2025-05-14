@@ -3,6 +3,8 @@ import 'dotenv/config';
 import { AppDataSource } from './data/data-source';
 import { Logger } from './utils/logger';
 import { FileSystem } from './utils/file-system';
+// 
+import { ManagerFileAndFolder } from './core/drive/ManagerFileAndFolder';
 // Repositories
 import { VideoRepository } from './data/repositories/video-repository';
 import { CollaboratorRepository } from './data/repositories/collaborator-repository';
@@ -53,6 +55,7 @@ export class Application {
 
   // Core Components
   public readonly videoProcessor: VideoProcessor;
+  private readonly managerFileAndFolder: ManagerFileAndFolder;
   public readonly transcriptionQueue: TranscriptionQueue;
   public readonly driveWatcher: DriveWatcher;
 
@@ -109,6 +112,9 @@ export class Application {
     // Inicializar processador de transcrição
     this.transcriptionProcessor = new TranscriptionProcessor(this.logger)
 
+    // Inicializar Manager File And Folder
+    this.managerFileAndFolder = new ManagerFileAndFolder(this.driveService);
+
     // Inicializar componentes core
     this.videoProcessor = new VideoProcessor(
       this.logger,
@@ -118,7 +124,8 @@ export class Application {
       this.tokenManager,
       this.driveService,
       this.audioProcessor,
-      this.transcriptionProcessor
+      this.transcriptionProcessor,
+      this.managerFileAndFolder
     );
 
     this.transcriptionQueue = new TranscriptionQueue(

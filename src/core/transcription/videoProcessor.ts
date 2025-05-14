@@ -10,6 +10,7 @@ import { TokenManager } from "../../infrastructure/auth/token-manager";
 import { AudioProcessor } from "./audio-processor";
 import { DriveService } from "../../core/drive/drive-service";
 import type { TranscriptionProcessor } from "./transcription-processor";
+import { ManagerFileAndFolder } from "../drive/ManagerFileAndFolder";
 
 export interface ProcessingResult {
   success: boolean;
@@ -37,7 +38,8 @@ export class VideoProcessor {
     private tokenManager: TokenManager,
     private driveService: DriveService,
     private audioProcessor: AudioProcessor,
-    private transcriptionProcessor: TranscriptionProcessor
+    private transcriptionProcessor: TranscriptionProcessor,
+    private managerFileAndFolder: ManagerFileAndFolder
   ) {
     // Configurar caminhos do ffmpeg (podem vir de variáveis de ambiente)
     this.ffmpegPath = process.env.FFMPEG_PATH || "ffmpeg";
@@ -46,7 +48,6 @@ export class VideoProcessor {
     ffmpeg.setFfmpegPath(this.ffmpegPath);
     ffmpeg.setFfprobePath(this.ffprobePath);
   }
-  // ... código anterior permanece inalterado ...
 
   public async processVideo(
     videoId: string,
@@ -113,6 +114,8 @@ export class VideoProcessor {
       });
 
       const drive = google.drive({ version: "v3", auth: oauth2Client });
+    
+      // pegando o dados do vídeo
       const fileInfo = await drive.files.get({
         fileId: videoId,
         fields: "name,parents",
@@ -186,7 +189,7 @@ export class VideoProcessor {
           .replace(/[\/\\:*?"<>|]/g, '-')
           .trim();
         this.logger.info(
-          "Criando pasta no Google Drive para o vídeo e transcrição",
+          "Iniciando a organização dos arquivos no Google Drive",
           {
             parentFolder: originalFolderPath,
             newFolderName: sanitizedFolderName,
@@ -239,43 +242,12 @@ export class VideoProcessor {
           fileName: transcriptionDocFileName,
         });
 
-        // criando dentro da pasta de transcricao o file de transcricao
-        await drive.files.create({
-          requestBody: {
-            name: transcriptionDocFileName,
-            parents: [transcricaoFolderId],
-            mimeType: "application/msword",
-          },
-          media: {
-            mimeType: "application/msword",
-            body: transcription,
-          },
-        });
-        this.logger.info("Transcrição (DOC) enviada para o Google Drive com sucesso");
-
-        // Se quiser copiar o vídeo original para a pasta de gravação
-        if (originalFolderPath !== gravacaoFolderId) {
-          this.logger.info("Copiando vídeo original para a pasta de gravação", {
-            videoId,
-            destFolder: gravacaoFolderId
-          });
-
-          // Mover o vídeo original para a pasta de gravação (gravacaoFolderId)
-          await drive.files.update({
-            fileId: videoId,
-            addParents: gravacaoFolderId,
-            removeParents: originalFolderPath,
-            requestBody: {
-              name: originalFileName,
-            },
-          });
-
-          this.logger.info("Vídeo copiado para a pasta de gravação com sucesso");
+        // função que define aonde o arquivo vai ser salvo
+        const manageTranscriptionAndVideoFile = await this.managerFileAndFolder.organize(drive, transcriptionDocFileName, transcription,'text/plain', videoId);
+        
+        if(manageTranscriptionAndVideoFile === true){
+          this.logger.info("Transcrição (DOC) enviada para o Google Drive com sucesso");
         }
-
-        this.logger.info(
-          "Transcrição (DOC) enviada para o Google Drive com sucesso"
-        );
       }
 
       // Enviar notificação via webhook
