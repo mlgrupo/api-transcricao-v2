@@ -113,7 +113,7 @@ export class Application {
     this.transcriptionProcessor = new TranscriptionProcessor(this.logger)
 
     // Inicializar Manager File And Folder
-    this.managerFileAndFolder = new ManagerFileAndFolder(this.driveService);
+    this.managerFileAndFolder = new ManagerFileAndFolder(this.driveService, this.webhookService);
 
     // Inicializar componentes core
     this.videoProcessor = new VideoProcessor(

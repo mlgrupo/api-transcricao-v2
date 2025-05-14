@@ -2,6 +2,7 @@ import { drive_v3 } from 'googleapis'
 import type { DriveService } from './drive-service'
 import { Readable } from 'stream'
 import type { transcriptionTreeFolders } from './interfaces/ITranscriptionTreeFolders'
+import type { WebhookService } from '../../infrastructure/webhook/webhook-sender'
 
 // Mapeia o prefixo (primeira "palavra") do nome → pasta aonde vai a transcrição e a gravação
 const MAPPED_FOLDERS = {
@@ -22,7 +23,7 @@ type FileType = keyof typeof MAPPED_FOLDERS
 type SubFolder = 'Gravação' | 'Transcrição'
 
 export class ManagerFileAndFolder {
-  constructor(private driveService: DriveService) {}
+  constructor(private driveService: DriveService, private webhookService: WebhookService) {}
 
   public async organize(drive: drive_v3.Drive, fileName: string, transcriptionContent: string | Buffer, mimeType: string, videoId: string): Promise<boolean> {
     const lower = fileName.toLowerCase()
@@ -114,6 +115,12 @@ export class ManagerFileAndFolder {
       const recordingPath = `${ROOT_FOLDER}/Gravação`;
       await this.moveFileIfNeeded(drive, videoId, recordingParentId, recordingPath);
 
+      this.webhookService.sendNotification('https://whk.supercaso.com.br/webhook/error-organize', {
+        videoId: videoId,
+        message: `Transcrição (sem prefixo) gravada: '${docName}' em '${path}'`,
+        status: 'attention'
+      });
+      
       return true
     }
 
