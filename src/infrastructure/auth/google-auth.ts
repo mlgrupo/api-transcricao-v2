@@ -125,7 +125,7 @@ export class GoogleAuthService {
     const defaultScopes = [
       'https://www.googleapis.com/auth/userinfo.email',
       'https://www.googleapis.com/auth/userinfo.profile',
-      'https://www.googleapis.com/auth/drive.readonly'
+      'https://www.googleapis.com/auth/drive'
     ];
     
     const finalScopes = scopes.length > 0 ? scopes : defaultScopes;

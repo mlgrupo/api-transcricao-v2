@@ -34,7 +34,7 @@ export class TranscriptionProcessor {
       // enviando para o python transcrever
       try {
         const startTime = Date.now();
-        const { stdout } = await execAsync(`python "${scriptPath}" "${audioPath}"`, {
+        const { stdout } = await execAsync(`py "${scriptPath}" "${audioPath}"`, {
           maxBuffer: 1024 * 1024 * 10,
           encoding: "utf8",
         });

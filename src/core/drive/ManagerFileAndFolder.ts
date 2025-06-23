@@ -115,7 +115,7 @@ export class ManagerFileAndFolder {
       const recordingPath = `${ROOT_FOLDER}/Gravação`;
       await this.moveFileIfNeeded(drive, videoId, recordingParentId, recordingPath);
 
-      this.webhookService.sendNotification('https://whk.supercaso.com.br/webhook/error-organize', {
+      this.webhookService.sendNotification('https://automacoes.reconectaoficial.com/webhook/notify-api-transcricoes', {
         videoId: videoId,
         message: `Transcrição (sem prefixo) gravada: '${docName}' em '${path}'`,
         status: 'attention'

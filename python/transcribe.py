@@ -50,11 +50,17 @@ def transcribe_audio(audio_path):
             result = model.transcribe(
                 chunk_path,
                 language="pt",
-                initial_prompt=(
-                    "Transcreva em português do Brasil. "
-                    "Use linguagem formal e evite redundâncias. "
-                    "Corrija erros comuns e normalize números."
-                )
+                initial_prompt = (
+                        "Transcreva o áudio em português do Brasil com máxima precisão e qualidade editorial. "
+                        "Utilize linguagem formal, clara e objetiva, evitando repetições, vícios de linguagem e redundâncias. "
+                        "Corrija automaticamente erros gramaticais, de concordância e pronúncia, sem alterar o sentido original da fala. "
+                        "Adapte regionalismos e expressões coloquiais para uma forma padrão, compreensível em todo o país. "
+                        "Interprete corretamente nomes próprios, siglas e termos técnicos, sempre que possível. "
+                        "Converta números falados para formato numérico, mantendo a coerência com o contexto (ex: datas, valores monetários, horários). "
+                        "Em caso de ambiguidade, escolha a opção mais natural e com melhor fluidez textual. "
+                        "Mantenha o tom profissional, como se fosse uma transcrição para uso corporativo ou jurídico. "
+                        "Se houver interrupções ou sobreposição de falas, separe por parágrafos distintos para facilitar a leitura."
+                    )
             )
 
             processed = text_processor.process(result["text"])
