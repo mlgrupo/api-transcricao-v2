@@ -1,6 +1,5 @@
 FROM nikolaik/python-nodejs:python3.12-nodejs18
 
-# ⚠️ Coloca depois do npm install!
 WORKDIR /app
 
 # Instala ffmpeg
@@ -8,29 +7,30 @@ RUN apt-get update && \
     apt-get install -y ffmpeg && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Copia pacotes e instala tudo (incluindo tsup/typescript)
+# Copia pacotes e instala dependências Node.js
 COPY package.json package-lock.json* ./
 RUN npm install
 
-# Agora sim, define o ambiente final
+# Define variáveis de ambiente
 ENV NODE_ENV=production
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 
-# Copia código
+# Copia o restante do código
 COPY . .
 
-# Build com tsup
+# Build do projeto Node.js
 RUN npm run dist
 
-# Python deps
-COPY python/requirements.txt ./python/
+# Instala dependências Python
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r python/requirements.txt
 
-# Pasta temporária
+# Cria pasta temporária com permissão total
 RUN mkdir -p /app/temp && chmod 777 /app/temp
 
-EXPOSE 9898
+# Exponha a porta (Railway usa a variável PORT, mas expor 8080 é padrão)
+EXPOSE 8080
 
+# Starta o servidor (usa a porta definida pelo Railway)
 CMD ["node", "dist/server.js"]
