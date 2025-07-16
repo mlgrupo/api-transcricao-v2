@@ -25,9 +25,11 @@ export class ConfigController {
       }
       const folders = await this.configRepository.getRootFolders(user.userId);
       res.status(200).json({ folders });
+      return;
     } catch (error: any) {
       this.logger.error("Erro ao buscar pastas raiz:", error);
       res.status(500).json({ error: error.message });
+      return;
     }
   }
 
@@ -53,9 +55,11 @@ export class ConfigController {
       }
       await this.configRepository.setRootFolders(folder, user.userId);
       res.status(200).json({ message: "Pastas configuradas com sucesso" });
+      return;
     } catch (error: any) {
       this.logger.error("Erro ao configurar pastas raiz:", error);
       res.status(500).json({ error: error.message });
+      return;
     }
   }
 
@@ -71,6 +75,7 @@ export class ConfigController {
     } catch (error: any) {
       this.logger.error("Erro ao buscar configuração de transcrição:", error);
       res.status(500).json({ error: error.message });
+      return;
     }
   }
 
@@ -92,6 +97,7 @@ export class ConfigController {
     } catch (error: any) {
       this.logger.error("Erro ao configurar transcrição:", error);
       res.status(500).json({ error: error.message });
+      return;
     }
   }
 
@@ -108,6 +114,7 @@ export class ConfigController {
     } catch (error: any) {
       this.logger.error("Erro ao buscar webhooks:", error);
       res.status(500).json({ error: error.message });
+      return;
     }
   }
 
@@ -152,6 +159,7 @@ export class ConfigController {
     } catch (error: any) {
       this.logger.error("Erro ao configurar webhooks:", error);
       res.status(500).json({ error: error.message });
+      return;
     }
   }
 
@@ -199,6 +207,7 @@ export class ConfigController {
     } catch (error: any) {
       this.logger.error("Erro ao testar webhook:", error);
       res.status(500).json({ error: error.message });
+      return;
     }
   }
 

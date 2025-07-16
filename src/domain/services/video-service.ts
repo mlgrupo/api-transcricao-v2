@@ -31,7 +31,7 @@ export class VideoService {
   }
 
   public async updateStatusVideo(videoId: string, status: boolean) {
-    return this.videoRepository.updateStatusVideo(videoId, status);
+    return this.videoRepository.updateStatusVideo(videoId, String(status));
   }
 
   public async getPendingVideos(limit: number = 5) {

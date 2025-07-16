@@ -198,32 +198,35 @@ export class AuthController {
 
   public async createUser(req: Request, res: Response): Promise<void> {
     try {
-      // Verifica se o usuário autenticado é admin
       const user = req.user as any;
       if (!user || !user.isAdmin) {
-        return res.status(403).json({ error: 'Acesso negado. Apenas administradores podem criar usuários.' });
+        res.status(403).json({ error: 'Acesso negado. Apenas administradores podem criar usuários.' });
+        return;
       }
       const { name, email, password, isAdmin } = req.body;
       if (!name || !email || !password) {
-        return res.status(400).json({ error: 'Nome, email e senha são obrigatórios.' });
+        res.status(400).json({ error: 'Nome, email e senha são obrigatórios.' });
+        return;
       }
       // Verifica se já existe usuário com esse email
       const existing = await this.collaboratorService.getCollaboratorByEmail(email);
       if (existing) {
-        return res.status(409).json({ error: 'Já existe um usuário com esse email.' });
+        res.status(409).json({ error: 'Já existe um usuário com esse email.' });
+        return;
       }
       // Cria o usuário
-      const hashedPassword = await bcrypt.hash(password, 10);
       await this.collaboratorService.createCollaborator({
         name,
         email,
-        password: hashedPassword,
+        password,
         isAdmin: !!isAdmin
       });
-      return res.status(201).json({ message: 'Usuário criado com sucesso.' });
+      res.status(201).json({ message: 'Usuário criado com sucesso.' });
+      return;
     } catch (error: any) {
       this.logger.error('Erro ao criar usuário:', error.message);
-      return res.status(500).json({ error: 'Erro interno ao criar usuário.' });
+      res.status(500).json({ error: 'Erro interno ao criar usuário.' });
+      return;
     }
   }
 

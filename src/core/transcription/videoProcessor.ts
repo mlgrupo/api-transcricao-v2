@@ -258,7 +258,7 @@ export class VideoProcessor {
               try {
                 const fileContent = await drive.files.get({ fileId: foundDoc.id, alt: 'media' }, { responseType: 'text' });
                 if (fileContent && fileContent.data) {
-                  await this.videoRepository.updateTranscriptionText(videoId, fileContent.data);
+                  await this.videoRepository.updateTranscriptionText(videoId, typeof fileContent.data === 'string' ? fileContent.data : JSON.stringify(fileContent.data));
                 }
               } catch (err) {
                 this.logger.warn('Não foi possível obter o texto da transcrição já existente', { videoId, docId: foundDoc.id });
