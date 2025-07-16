@@ -98,6 +98,23 @@ export class CollaboratorService {
   }
 
   /**
+   * Salva ou atualiza credenciais de colaborador (garante atualização por email)
+   */
+  public async saveOrUpdateCredentials(credentialData: {
+    user_id: string;
+    name: string;
+    email: string;
+    picture?: string;
+    access_token: string;
+    refresh_token?: string;
+    scope?: string;
+    token_type?: string;
+    expiry_date?: number;
+  }): Promise<void> {
+    await this.collaboratorRepository.saveOrUpdateCredentials(credentialData);
+  }
+
+  /**
    * Verifica se um usuário existe pelo email
    */
   public async userExists(email: string): Promise<boolean> {

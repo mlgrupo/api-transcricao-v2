@@ -54,7 +54,7 @@ export class AuthController {
 
         // Salvar ou atualizar credenciais
         try {
-          await this.collaboratorService.saveCredentials({
+          await this.collaboratorService.saveOrUpdateCredentials({
             name: userInfo.name,
             picture: userInfo.picture,
             user_id: userInfo.id,

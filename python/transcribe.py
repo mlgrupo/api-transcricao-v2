@@ -91,7 +91,7 @@ class TranscriptionProcessor:
         self.audio_preprocessor = AudioPreprocessor()
         self.text_processor = TextPostProcessor()
         self.model = None
-    def load_model(self, model_size: str = "large-v3") -> whisper.Whisper:
+    def load_model(self, model_size: str = "turbo") -> whisper.Whisper:
         if self.model is None:
             logger.info(f"Carregando modelo Whisper: {model_size}")
             self.model = whisper.load_model(model_size)
