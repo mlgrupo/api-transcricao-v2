@@ -54,31 +54,82 @@ export class VideoService {
 
   public async resetQueueStatus(videoId: string): Promise<{ success: boolean; message: string }> {
     try {
+      this.logger.info(`Resetando status de fila para o vídeo: ${videoId}`);
       const video = await this.videoRepository.resetQueueStatus(videoId);
-      this.logger.info(`Status de fila resetado para o vídeo: ${video.videoId}`);
       
-      // Check if transcriptionService is defined before trying to use it
+      // Re-enfileirar o vídeo para processamento apenas se o serviço estiver disponível
       if (this.transcriptionService) {
-        // Re-enqueue the video for transcription
-        const task = await this.transcriptionService.enqueueVideo({
-          taskId: `retry-${video.videoId}`,
+        await this.transcriptionService.enqueueVideo({
+          taskId: `reset-${video.videoId}`,
           videoId: video.videoId,
           webhookUrl: process.env.WEBHOOK_URL || '',
-          email: video.userEmail!,
+          email: video.userEmail,
           folderId: video.pastaId
         });
-        
-        this.logger.info(`Vídeo ${video.videoId} re-enfileirado com sucesso, taskId: ${task}`);
+        this.logger.info(`Vídeo ${videoId} re-enfileirado com sucesso`);
       } else {
-        this.logger.warn(`TranscriptionService não disponível, vídeo ${video.videoId} não foi re-enfileirado`);
+        this.logger.warn(`TranscriptionService não disponível para re-enfileirar vídeo ${videoId}`);
       }
       
-      return { 
-        success: true, 
-        message: `Status de fila resetado para o vídeo ${video.videoId}` 
+      return {
+        success: true,
+        message: `Status de fila resetado para o vídeo ${video.videoId}`
       };
     } catch (error: any) {
       this.logger.error(`Erro ao resetar status de fila: ${videoId}`, error);
+      return {
+        success: false,
+        message: `Erro ao resetar status de fila: ${error.message}`
+      };
+    }
+  }
+
+  public async getVideoStats(userId: string): Promise<{
+    total: number;
+    completed: number;
+    processing: number;
+    pending: number;
+    failed: number;
+    error: number;
+  }> {
+    try {
+      const videos = await this.videoRepository.getAllVideos(userId);
+      const stats = {
+        total: videos.length,
+        completed: 0,
+        processing: 0,
+        pending: 0,
+        failed: 0,
+        error: 0
+      };
+      videos.forEach(video => {
+        switch (video.status) {
+          case 'completed':
+            stats.completed++;
+            break;
+          case 'processing':
+            stats.processing++;
+            break;
+          case 'pending':
+            stats.pending++;
+            break;
+          case 'failed':
+            stats.failed++;
+            break;
+          case 'error':
+            stats.error++;
+            break;
+          default:
+            if (video.transcrito) {
+              stats.completed++;
+            } else {
+              stats.pending++;
+            }
+        }
+      });
+      return stats;
+    } catch (error) {
+      this.logger.error('Erro ao buscar estatísticas dos vídeos:', error);
       throw error;
     }
   }
@@ -149,5 +200,38 @@ export class VideoService {
       this.logger.error(`Erro ao buscar vídeo por ID: ${videoId}`, error);
       throw error;
     }
+  }
+
+  public async getAllVideos(): Promise<Video[]> {
+    return this.videoRepository.getAllVideos();
+  }
+
+  public async enqueueVideoNow(videoId: string, userEmail: string): Promise<void> {
+    if (!this.transcriptionService) {
+      this.logger.warn('TranscriptionService não disponível para enfileirar vídeo prioritário');
+      return;
+    }
+    const taskId = `${userEmail}-${videoId}`;
+    await this.transcriptionService.enqueueVideoNow({
+      taskId,
+      videoId,
+      webhookUrl: process.env.WEBHOOK_URL || '',
+      email: userEmail,
+    });
+    this.logger.info(`Vídeo ${videoId} enfileirado como prioridade com sucesso`);
+  }
+
+  public async cancelVideo(videoId: string): Promise<void> {
+    // Atualizar status no banco
+    await this.videoRepository.updateVideoStatus(videoId, 'cancelled');
+    // Remover da fila, se estiver
+    if (this.transcriptionService) {
+      this.transcriptionService.cancelJob(videoId);
+    }
+    this.logger.info(`Vídeo ${videoId} cancelado com sucesso.`);
+  }
+
+  async getLastVideoByUserAndFolder(userId: string, folderId: string) {
+    return this.videoRepository.getLastVideoByUserAndFolder(userId, folderId);
   }
 }

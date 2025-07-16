@@ -46,4 +46,17 @@ export class FileSystem {
       return false;
     }
   }
+
+  public async clearTempDir(): Promise<void> {
+    const tempDir = path.join(process.cwd(), "temp");
+    try {
+      await this.removeDirectory(tempDir, true);
+      await fs.mkdir(tempDir, { recursive: true, mode: 0o777 });
+      await fs.chmod(tempDir, 0o777);
+      this.logger.info("Pasta temp limpa com sucesso", { path: tempDir });
+    } catch (error: any) {
+      this.logger.error("Erro ao limpar pasta temp:", { error: error.message, path: tempDir });
+      throw error;
+    }
+  }
 }

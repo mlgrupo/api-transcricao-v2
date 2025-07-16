@@ -111,6 +111,13 @@ export class CollaboratorService {
   }
 
   /**
+   * Verifica se o usuário tem credencial ativa (Drive conectado)
+   */
+  public async hasActiveDrive(userId: string): Promise<boolean> {
+    return this.collaboratorRepository.hasActiveDrive(userId);
+  }
+
+  /**
    * Obtém informações básicas do colaborador
    */
   public async getCollaboratorInfo(email: string): Promise<{
@@ -118,20 +125,45 @@ export class CollaboratorService {
     name: string;
     email: string;
     picture?: string;
+    driveConnected: boolean;
   } | null> {
     try {
       const credentials = await this.collaboratorRepository.getUserTokens(email);
       if (!credentials) return null;
-      
+      const driveConnected = await this.hasActiveDrive(credentials.userId);
       return {
         userId: credentials.userId,
         name: credentials.name,
         email: credentials.email,
-        picture: credentials.picture
+        picture: credentials.picture,
+        driveConnected
       };
     } catch (error: any) {
       this.logger.error(`Erro ao obter informações do colaborador ${email}:`, error);
       return null;
+    }
+  }
+
+  /**
+   * Busca colaborador por e-mail e retorna com status de driveConnected
+   */
+  public async getCollaboratorByEmail(email: string) {
+    const collaborator = await this.collaboratorRepository.getCollaboratorByEmail(email);
+    if (!collaborator) return null;
+    const driveConnected = await this.hasActiveDrive(collaborator.userId);
+    return { ...collaborator, driveConnected };
+  }
+
+  /**
+   * Cria um novo colaborador manualmente (admin)
+   */
+  public async createCollaborator(data: { name: string; email: string; password: string; isAdmin?: boolean }): Promise<void> {
+    try {
+      await this.collaboratorRepository.createCollaborator(data);
+      this.logger.info(`Colaborador criado manualmente: ${data.email}`);
+    } catch (error: any) {
+      this.logger.error('Erro ao criar colaborador manualmente:', error);
+      throw error;
     }
   }
 }

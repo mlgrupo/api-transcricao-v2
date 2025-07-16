@@ -21,24 +21,23 @@ export class JobScheduler {
   }
 
   private setupDriveWatcherJob(): void {
-    // Escanear pastas a cada 1 minutos
-    const scanJob = new CronJob(
+    // Polling leve a cada 1 minuto
+    const pollJob = new CronJob(
       '*/1 * * * *',
       async () => {
-        this.logger.info('Iniciando escaneamento periódico de pastas...');
+        this.logger.info('Iniciando polling leve de novos vídeos...');
         try {
-          await this.driveWatcher.scanAllUsersFolders();
-          this.logger.info('Escaneamento periódico de pastas concluído');
+          await this.driveWatcher.pollNewVideos();
+          this.logger.info('Polling leve concluído');
         } catch (error: any) {
-          this.logger.error('Erro no escaneamento periódico:', error);
+          this.logger.error('Erro no polling leve:', error);
         }
       },
       null,
       true,
       'America/Sao_Paulo'
     );
-
-    this.logger.info('Job de escaneamento de pastas configurado');
+    this.logger.info('Job de polling leve de novos vídeos configurado');
   }
 
   private setupPendingVideosJob(): void {

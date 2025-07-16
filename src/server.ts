@@ -4,6 +4,7 @@ import cors from 'cors';
 import { rateLimit } from 'express-rate-limit';
 import { appPromise } from './application';
 import { setupRoutes } from './api/routes/router';
+import { initializeDevSeed } from './data/seed-manager';
 
 const expressApp = express();
 const PORT = process.env.PORT || 3001;
@@ -17,8 +18,23 @@ const limiter = rateLimit({
   max: 100
 });
 
+// CORS dinâmico por variável de ambiente
+const corsOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
+  : ['http://localhost:3000'];
+
 // Middlewares
-expressApp.use(cors());
+expressApp.use(cors({
+  origin: (origin, callback) => {
+    // Permite requests sem origin (ex: Postman) ou se estiver na lista
+    if (!origin || corsOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true
+}));
 expressApp.use(express.json());
 expressApp.use(limiter);
 
@@ -30,9 +46,11 @@ expressApp.use((err: Error, req: express.Request, res: express.Response, next: e
 
 async function startServer() {
   try {
-    // Inicializar aplicação
+    // Inicializar aplicação primeiro (isso garante que o DataSource seja inicializado)
     const app = await appPromise;
     await app.initialize();
+    
+    // Agora que o DataSource está inicializado, podemos executar o seed
 
     // Calcular data limite (1 dia antes da inicialização)
     const creationDateFilter = new Date();
@@ -43,6 +61,7 @@ async function startServer() {
     }
 
     // Configurar rotas
+    expressApp.set('collaboratorService', app.collaboratorService);
     setupRoutes(
       expressApp,
       app.logger,

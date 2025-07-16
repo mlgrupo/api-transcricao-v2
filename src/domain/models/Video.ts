@@ -26,8 +26,9 @@ export class Video {
   @Column({ name: "mime_type", nullable: true, type: "varchar" })
   mimeType?: string;
 
-  @Column({ default: false, type: "boolean" })
-  transcrito!: boolean;
+  // Agora armazena o texto da transcrição (antes era boolean)
+  @Column({ nullable: true, type: "text" })
+  transcrito?: string;
 
   @Column({ default: false, type: "boolean" })
   enfileirado!: boolean;
@@ -37,6 +38,15 @@ export class Video {
 
   @Column({ name: "error_message", nullable: true, type: "text" })
   errorMessage?: string;
+
+  @Column({ name: "progress", type: "int", default: 0 })
+  progress!: number;
+
+  @Column({ name: "etapa_atual", type: "varchar", nullable: true })
+  etapaAtual?: string;
+
+  @Column({ name: "google_docs_url", nullable: true, type: "varchar" })
+  googleDocsUrl?: string;
 
   @CreateDateColumn({ name: "dt_criacao" })
   dtCriacao!: Date;

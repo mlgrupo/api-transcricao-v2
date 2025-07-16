@@ -41,7 +41,7 @@ export class VideoRepository {
       video.mimeType = videoData.mimeType;
       video.userEmail = videoData.user_email;
       video.usuarioId = videoData.usuario_id;
-      video.transcrito = false;
+      video.transcrito = undefined;
       video.enfileirado = false;
 
       const savedVideo = await this.repository.save(video);
@@ -64,7 +64,7 @@ export class VideoRepository {
     }
   }
 
-  public async updateStatusVideo(videoId: string, status: boolean): Promise<boolean> {
+  public async updateStatusVideo(videoId: string, status: string | undefined): Promise<boolean> {
     try {
       const result = await this.repository.update(
         { videoId },
@@ -77,12 +77,25 @@ export class VideoRepository {
     }
   }
 
+  public async updateVideoStatus(videoId: string, status: string): Promise<void> {
+    await this.repository.createQueryBuilder()
+      .update(Video)
+      .set({ status, enfileirado: false, dtAtualizacao: new Date() })
+      .where("videoId = :videoId", { videoId })
+      .execute();
+  }
+
   public async getPendingVideos(limit: number = 5): Promise<Video[]> {
     try {
       return await this.repository.createQueryBuilder("video")
-        .where("video.transcrito = :transcrito", { transcrito: false })
+        .where("(video.transcrito IS NULL OR video.transcrito = '')")
         .andWhere("video.enfileirado = :enfileirado", { enfileirado: false })
-        .andWhere("(video.status IS NULL OR video.status != :processing)", { processing: "processing" })
+        .andWhere("(video.status IS NULL OR (video.status != :processing AND video.status != :completed AND video.status != :error AND video.status != :cancelled))", { 
+          processing: "processing", 
+          completed: "completed", 
+          error: "error",
+          cancelled: "cancelled"
+        })
         .orderBy("video.dtCriacao", "ASC")
         .limit(limit)
         .getMany();
@@ -133,7 +146,7 @@ export class VideoRepository {
       const result = await this.repository.createQueryBuilder()
         .update(Video)
         .set({ 
-          transcrito: true,
+          transcrito: 'ERRO',
           enfileirado: false,
           status: "error",
           errorMessage,
@@ -183,7 +196,7 @@ export class VideoRepository {
       const result = await this.repository.createQueryBuilder()
         .update(Video)
         .set({ 
-          transcrito: true,
+          transcrito: undefined,
           enfileirado: false,
           status: "completed",
           dtAtualizacao: new Date()
@@ -199,6 +212,83 @@ export class VideoRepository {
       return result.raw[0];
     } catch (error: any) {
       this.logger.error(`Erro ao marcar vídeo como completo: ${videoId}`, error);
+      throw error;
+    }
+  }
+
+  public async updateProgress(videoId: string, progress: number, etapaAtual: string): Promise<Video> {
+    try {
+      const result = await this.repository.createQueryBuilder()
+        .update(Video)
+        .set({ 
+          progress,
+          etapaAtual,
+          dtAtualizacao: new Date()
+        })
+        .where("videoId = :videoId", { videoId })
+        .returning("*")
+        .execute();
+
+      if (!result.raw || result.raw.length === 0) {
+        throw new Error(`Vídeo com ID ${videoId} não encontrado`);
+      }
+      
+      this.logger.info(`Progresso atualizado para vídeo ${videoId}: ${progress}% - ${etapaAtual}`);
+      return result.raw[0];
+    } catch (error: any) {
+      this.logger.error(`Erro ao atualizar progresso do vídeo: ${videoId}`, error);
+      throw error;
+    }
+  }
+
+  public async updateGoogleDocsUrl(videoId: string, googleDocsUrl: string): Promise<Video> {
+    try {
+      const result = await this.repository.createQueryBuilder()
+        .update(Video)
+        .set({ 
+          googleDocsUrl,
+          dtAtualizacao: new Date()
+        })
+        .where("videoId = :videoId", { videoId })
+        .returning("*")
+        .execute();
+
+      if (!result.raw || result.raw.length === 0) {
+        throw new Error(`Vídeo com ID ${videoId} não encontrado`);
+      }
+      
+      this.logger.info(`URL do documento atualizada para vídeo ${videoId}: ${googleDocsUrl}`);
+      return result.raw[0];
+    } catch (error: any) {
+      this.logger.error(`Erro ao atualizar URL do documento do vídeo: ${videoId}`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Atualiza o texto da transcrição do vídeo
+   */
+  public async updateTranscriptionText(videoId: string, transcription: string): Promise<Video> {
+    try {
+      const result = await this.repository.createQueryBuilder()
+        .update(Video)
+        .set({ 
+          transcrito: transcription || undefined,
+          status: "completed",
+          enfileirado: false,
+          dtAtualizacao: new Date()
+        })
+        .where("videoId = :videoId", { videoId })
+        .returning("*")
+        .execute();
+
+      if (!result.raw || result.raw.length === 0) {
+        throw new Error(`Vídeo com ID ${videoId} não encontrado`);
+      }
+      this.logger.info(`Transcrição salva para vídeo ${videoId}`);
+      return result.raw[0];
+    } catch (error: any) {
+      this.logger.error(`Erro ao salvar transcrição do vídeo: ${videoId}`, error);
       throw error;
     }
   }
@@ -261,5 +351,49 @@ export class VideoRepository {
         whisperAvailable: false
       };
     }
+  }
+
+  public async getAllVideos(userId?: string): Promise<Video[]> {
+    try {
+      let videos;
+      if (userId) {
+        videos = await this.repository.find({ where: { usuarioId: userId } });
+      } else {
+        videos = await this.repository.find();
+      }
+      // Ajustar status conforme a lógica robusta
+      return videos.map(v => {
+        const transcritoValido = v.transcrito && typeof v.transcrito === 'string' && v.transcrito.trim() !== '' && v.transcrito !== 'ERRO';
+        let status: string;
+        if (v.status === 'processing') status = 'processing';
+        else if (v.status === 'cancelled') status = 'cancelled';
+        else if (v.status === 'error' || v.transcrito === 'ERRO') status = 'failed';
+        else if (transcritoValido) status = 'completed';
+        else status = 'pending';
+        return { ...v, status };
+      });
+    } catch (error: any) {
+      this.logger.error('Erro ao buscar todos os vídeos:', error);
+      throw error;
+    }
+  }
+
+  public async getStuckVideos(): Promise<Video[]> {
+    try {
+      return await this.repository.createQueryBuilder("video")
+        .where("video.status = :processing OR video.status = :pending", { processing: "processing", pending: "pending" })
+        .orderBy("video.dtCriacao", "ASC")
+        .getMany();
+    } catch (error: any) {
+      this.logger.error("Erro ao buscar vídeos travados:", error);
+      throw error;
+    }
+  }
+
+  async getLastVideoByUserAndFolder(userId: string, folderId: string) {
+    return this.repository.findOne({
+      where: { usuarioId: userId, pastaId: folderId },
+      order: { createdTime: 'DESC' }
+    });
   }
 }

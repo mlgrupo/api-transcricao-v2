@@ -2,6 +2,8 @@ import { Request, Response } from "express";
 import { Logger } from "../../utils/logger";
 import { TranscriptionService } from "../../domain/services/transcription-service";
 import { VideoService } from "../../domain/services/video-service";
+import { Document, Packer, Paragraph, TextRun } from 'docx';
+import type { Video } from '../../domain/models/Video';
 
 export class TranscriptionController {
   constructor(
@@ -103,6 +105,184 @@ export class TranscriptionController {
           error: error.message,
         });
       }
+    }
+  }
+
+  public async getAllVideos(req: Request, res: Response): Promise<void> {
+    try {
+      // Verifica se o usuário é admin
+      const user = (req as any).user;
+      if (!user || !user.isAdmin) {
+        res.status(403).json({ error: 'Acesso restrito a administradores.' });
+        return;
+      }
+      const videos = await this.videoService.getAllVideos();
+      res.status(200).json(videos);
+    } catch (error: any) {
+      this.logger.error('Erro ao buscar todos os vídeos:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  public async getVideoStats(req: Request, res: Response): Promise<void> {
+    try {
+      const user = (req as any).user;
+      if (!user || !user.userId) {
+        res.status(401).json({ error: 'Usuário não autenticado' });
+        return;
+      }
+      const stats = await this.videoService.getVideoStats(user.userId);
+      res.status(200).json(stats);
+    } catch (error: any) {
+      this.logger.error('Erro ao buscar estatísticas dos vídeos:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  public async getVideoStatus(req: Request, res: Response): Promise<void> {
+    try {
+      const { videoId } = req.params;
+      
+      if (!videoId) {
+        res.status(400).json({ error: 'ID do vídeo é obrigatório' });
+        return;
+      }
+
+      const video = await this.videoService.getVideoById(videoId);
+      
+      if (!video) {
+        res.status(404).json({ error: 'Vídeo não encontrado' });
+        return;
+      }
+
+      res.status(200).json({
+        videoId: video.videoId,
+        videoName: video.videoName,
+        status: video.status,
+        progress: video.progress || 0,
+        etapaAtual: video.etapaAtual || 'Não iniciado',
+        transcrito: video.transcrito,
+        enfileirado: video.enfileirado,
+        errorMessage: video.errorMessage,
+        dtCriacao: video.dtCriacao,
+        dtAtualizacao: video.dtAtualizacao
+      });
+    } catch (error: any) {
+      this.logger.error('Erro ao buscar status do vídeo:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Gera e faz download do DOCX da transcrição de um vídeo (apenas admin)
+   */
+  public async downloadTranscriptionDocx(req: Request, res: Response): Promise<void> {
+    try {
+      // Verifica se o usuário é admin
+      const user = (req as any).user;
+      if (!user || !user.isAdmin) {
+        res.status(403).json({ error: 'Acesso restrito a administradores.' });
+        return;
+      }
+      const { videoId } = req.params;
+      if (!videoId) {
+        res.status(400).json({ error: 'ID do vídeo é obrigatório.' });
+        return;
+      }
+      const video: Video | null = await this.videoService.getVideoById(videoId);
+      if (!video) {
+        res.status(404).json({ error: 'Vídeo não encontrado.' });
+        return;
+      }
+      if (!video.transcrito || typeof video.transcrito !== 'string' || video.transcrito.trim().length === 0) {
+        res.status(404).json({ error: 'Transcrição não encontrada para este vídeo.' });
+        return;
+      }
+      const transcription: string = video.transcrito;
+      // Gerar DOCX em memória
+      const doc = new Document({
+        sections: [
+          {
+            properties: {},
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({ text: `Transcrição do vídeo: ${video.videoName || videoId}`, bold: true, size: 28 }),
+                ],
+              }),
+              new Paragraph({ text: '' }),
+              ...transcription.split('\n').map((line: string) => new Paragraph(line)),
+            ],
+          },
+        ],
+      });
+      const buffer = await Packer.toBuffer(doc);
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+      res.setHeader('Content-Disposition', `attachment; filename="transcricao_${videoId}.docx"`);
+      res.send(buffer);
+    } catch (error: any) {
+      this.logger.error('Erro ao gerar DOCX da transcrição:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Processa imediatamente um vídeo (admin)
+   */
+  public async processNow(req: Request, res: Response): Promise<void> {
+    try {
+      const user = (req as any).user;
+      if (!user || !user.isAdmin) {
+        res.status(403).json({ error: 'Acesso restrito a administradores.' });
+        return;
+      }
+      const { videoId } = req.params;
+      if (!videoId) {
+        res.status(400).json({ error: 'ID do vídeo é obrigatório.' });
+        return;
+      }
+      // Buscar vídeo
+      const video = await this.videoService.getVideoById(videoId);
+      if (!video) {
+        res.status(404).json({ error: 'Vídeo não encontrado.' });
+        return;
+      }
+      // Adicionar na fila como prioridade
+      await this.videoService.enqueueVideoNow(videoId, video.userEmail);
+      res.status(200).json({ message: 'Vídeo colocado para processamento imediato.' });
+    } catch (error: any) {
+      this.logger.error('Erro ao processar vídeo imediatamente:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Cancela um vídeo (admin)
+   */
+  public async cancelVideo(req: Request, res: Response): Promise<void> {
+    try {
+      const user = (req as any).user;
+      if (!user || !user.isAdmin) {
+        res.status(403).json({ error: 'Acesso restrito a administradores.' });
+        return;
+      }
+      const { videoId } = req.params;
+      if (!videoId) {
+        res.status(400).json({ error: 'ID do vídeo é obrigatório.' });
+        return;
+      }
+      // Buscar vídeo
+      const video = await this.videoService.getVideoById(videoId);
+      if (!video) {
+        res.status(404).json({ error: 'Vídeo não encontrado.' });
+        return;
+      }
+      // Cancelar vídeo
+      await this.videoService.cancelVideo(videoId);
+      res.status(200).json({ message: 'Vídeo cancelado com sucesso.' });
+    } catch (error: any) {
+      this.logger.error('Erro ao cancelar vídeo:', error);
+      res.status(500).json({ error: error.message });
     }
   }
 }

@@ -1,12 +1,16 @@
 import { Express } from 'express';
 import { TranscriptionController } from '../controllers/Transcription-controller';
 import { AuthController } from '../controllers/auth-controller';
+import { DrivesController } from '../controllers/drives-controller';
+import { ConfigController } from '../controllers/config-controller';
 import { Logger } from '../../utils/logger';
 import { VideoService } from '../../domain/services/video-service';
 import { TranscriptionService } from '../../domain/services/transcription-service';
 import { CollaboratorService } from '../../domain/services/collaborator-service';
+import { ConfigRepository } from '../../data/repositories/config-repository';
 import { GoogleAuthService } from '../../infrastructure/auth/google-auth';
-import { authMiddleware } from '../middlewares/auth-middleware'
+import { authMiddleware, jwtAuthMiddleware } from '../middlewares/auth-middleware'
+import { SystemController } from '../controllers/system-controller';
 
 export const setupRoutes = (
   app: Express,
@@ -28,17 +32,25 @@ export const setupRoutes = (
     logger
   );
 
+  const drivesController = new DrivesController(
+    collaboratorService,
+    logger
+  );
+
+  const configRepository = new ConfigRepository(logger);
+  const configController = new ConfigController(configRepository, logger);
+
   // Rotas de autenticação
-  app.post('/auth/google/callback', (req, res) => {
-    console.log("entrou no google calllback")
-    authController.googleCallback(req, res);
-  });
-  
-  app.get('/auth/google/url', (_req, res) => {
-    console.log("entrou na rota de autenticação google url")
-    const authUrl = googleAuthService.getAuthUrl();
-    res.json({ authUrl });
-  });
+  app.post('/auth/google/callback', authController.googleCallback.bind(authController));
+  // @ts-ignore
+  app.get('/auth/google/url', SystemController.getGoogleAuthUrl(googleAuthService));
+  app.post('/auth/login', authController.login.bind(authController));
+  // @ts-ignore
+  app.get('/auth/me', jwtAuthMiddleware, AuthController.getMe);
+  // @ts-ignore
+  app.post('/auth/logout', jwtAuthMiddleware, SystemController.logout.bind(null));
+  // @ts-ignore
+  app.get('/auth/status', SystemController.authStatus.bind(null));
 
   // Rotas protegidas com API Key
   app.post(
@@ -59,20 +71,55 @@ export const setupRoutes = (
     transcriptionController.resetQueueStatus.bind(transcriptionController)
   );
 
-  app.get(
-    '/api/status',
-    (_req, res) => {
-      res.json({
-        status: 'online',
-        queueSize: transcriptionService.getQueueSize(),
-        processing: transcriptionService.getProcessingSize(),
-        version: process.env.npm_package_version || '1.0.0'
-      });
-    }
-  );
+  // @ts-ignore
+  app.get('/api/status', SystemController.apiStatus(transcriptionService));
+  // @ts-ignore
+  app.get('/health', SystemController.health.bind(null));
 
-  // Health check endpoint simples
-  app.get('/health', (_req, res) => {
-    res.json({ status: 'healthy' });
-  });
+  // Rotas protegidas com JWT
+  // @ts-ignore
+  app.get('/videos', jwtAuthMiddleware, transcriptionController.getAllVideos.bind(transcriptionController));
+
+  // Novas rotas para funcionalidades do frontend
+  // @ts-ignore
+  app.get('/api/videos/stats', jwtAuthMiddleware, transcriptionController.getVideoStats.bind(transcriptionController));
+  // @ts-ignore
+  app.get('/api/videos/:videoId/docx', jwtAuthMiddleware, transcriptionController.downloadTranscriptionDocx.bind(transcriptionController));
+  // @ts-ignore
+  app.post('/api/videos/:videoId/process-now', jwtAuthMiddleware, transcriptionController.processNow.bind(transcriptionController));
+  // @ts-ignore
+  app.post('/api/videos/:videoId/cancel', jwtAuthMiddleware, transcriptionController.cancelVideo.bind(transcriptionController));
+
+  // Rotas de drives conectados
+  // @ts-ignore
+  app.get('/api/drives', jwtAuthMiddleware, drivesController.getConnectedDrives.bind(drivesController));
+  // @ts-ignore
+  app.post('/api/drives/:email/connect', jwtAuthMiddleware, drivesController.generateConnectionLink.bind(drivesController));
+  // @ts-ignore
+  app.delete('/api/drives/:email/disconnect', jwtAuthMiddleware, drivesController.disconnectDrive.bind(drivesController));
+
+  // Rotas de configuração global
+  app.get('/api/config/root-folder', jwtAuthMiddleware, configController.getRootFolder.bind(configController));
+  app.post('/api/config/root-folder', jwtAuthMiddleware, configController.setRootFolder.bind(configController));
+  // @ts-ignore
+  app.get('/api/config/transcription', jwtAuthMiddleware, configController.getTranscriptionConfig.bind(configController));
+  // @ts-ignore
+  app.post('/api/config/transcription', jwtAuthMiddleware, configController.setTranscriptionConfig.bind(configController));
+  // @ts-ignore
+  app.get('/api/config/webhooks', jwtAuthMiddleware, configController.getWebhooks.bind(configController));
+  // @ts-ignore
+  app.post('/api/config/webhooks', jwtAuthMiddleware, configController.setWebhooks.bind(configController));
+  // @ts-ignore
+  app.post('/api/webhooks/test', jwtAuthMiddleware, configController.testWebhook.bind(configController));
+
+  // Rotas de vídeo
+  // @ts-ignore
+  app.get('/api/videos', jwtAuthMiddleware, transcriptionController.getAllVideos.bind(transcriptionController));
+  // @ts-ignore
+  app.get('/api/videos/:videoId/status', jwtAuthMiddleware, transcriptionController.getVideoStatus.bind(transcriptionController));
+  // @ts-ignore
+  app.post('/api/videos/:videoId/reset', jwtAuthMiddleware, transcriptionController.resetQueueStatus.bind(transcriptionController));
+
+  // Rota para criar usuário (apenas admin)
+  app.post('/api/users', jwtAuthMiddleware, authController.createUser.bind(authController));
 };

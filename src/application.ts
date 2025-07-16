@@ -143,7 +143,8 @@ export class Application {
       this.collaboratorService,
       this.videoService,
       this.tokenManager,
-      this.transcriptionQueue // Mesma instância da fila
+      this.transcriptionQueue, // Mesma instância da fila
+      this.webhookService // NOVO
     );
 
     // Inicializar scheduler
@@ -190,9 +191,15 @@ export class Application {
 
       // Criar diretório temporário
       await this.fileSystem.ensureTempDir();
+      // Limpar pasta temp ao iniciar
+      await this.fileSystem.clearTempDir();
+      this.logger.info('🧹 Pasta temp limpa ao iniciar.');
 
       // Carregar dados iniciais
       await this.preloadData();
+
+      // Re-enfileirar vídeos travados
+      await this.requeueStuckVideos();
 
       // Configurar jobs agendados
       this.jobScheduler.setupJobs();
@@ -225,43 +232,79 @@ export class Application {
       this.videoService.setTranscriptionService(this.transcriptionService);
       this.logger.info('✅ TranscriptionService injetado no VideoService');
 
-      // Exemplo: Carregar colaboradores para memória
-      const collaborators = await this.collaboratorService.getAllActiveCollaborators();
-      this.logger.info(`✅ ${collaborators.length} colaboradores ativos carregados.`);
+      // Exemplo: Carregar colaboradores para memória com tratamento de erro
+      try {
+        const collaborators = await this.collaboratorService.getAllActiveCollaborators();
+        this.logger.info(`✅ ${collaborators.length} colaboradores ativos carregados.`);
+      } catch (error: any) {
+        this.logger.error('❌ Erro ao carregar colaboradores:', error.message);
+        // Não interrompe a inicialização, apenas loga o erro
+      }
 
       // Verificar vídeos pendentes
-      const pendingVideos = await this.videoService.getPendingVideos();
-      this.logger.info(`✅ ${pendingVideos.length} vídeos pendentes encontrados.`);
+      try {
+        const pendingVideos = await this.videoService.getPendingVideos();
+        this.logger.info(`✅ ${pendingVideos.length} vídeos pendentes encontrados.`);
 
-      // Enfileirar vídeos pendentes
-      // Este código é apenas para demonstração, pode ser implementado em um serviço próprio
-      if (pendingVideos.length > 0) {
-        this.logger.info('Enfileirando vídeos pendentes...');
-        for (const video of pendingVideos) {
-          if (!video.enfileirado && video.userEmail) {
-            const taskId = `pending-${video.videoId}`;
-            try {
-              // Marcar como enfileirado
-              await this.videoService.markVideoAsQueued(video.videoId);
+        // Enfileirar vídeos pendentes
+        // Este código é apenas para demonstração, pode ser implementado em um serviço próprio
+        if (pendingVideos.length > 0) {
+          this.logger.info('Enfileirando vídeos pendentes...');
+          for (const video of pendingVideos) {
+            if (!video.enfileirado && video.userEmail) {
+              const taskId = `pending-${video.videoId}`;
+              try {
+                // Marcar como enfileirado
+                await this.videoService.markVideoAsQueued(video.videoId);
 
-              // Adicionar à fila
-              this.transcriptionQueue.add(taskId, {
-                videoId: video.videoId,
-                webhookUrl: process.env.WEBHOOK_URL || '',
-                email: video.userEmail,
-                folderId: video.pastaId
-              });
+                // Adicionar à fila
+                this.transcriptionQueue.add(taskId, {
+                  videoId: video.videoId,
+                  webhookUrl: process.env.WEBHOOK_URL || '',
+                  email: video.userEmail,
+                  folderId: video.pastaId
+                });
 
-              this.logger.info(`✅ Vídeo pendente enfileirado: ${video.videoId}`);
-            } catch (err: any) {
-              this.logger.error(`❌ Erro ao enfileirar vídeo pendente ${video.videoId}:`, err);
+                this.logger.info(`✅ Vídeo pendente enfileirado: ${video.videoId}`);
+              } catch (err: any) {
+                this.logger.error(`❌ Erro ao enfileirar vídeo pendente ${video.videoId}:`, err);
+              }
             }
           }
         }
+      } catch (error: any) {
+        this.logger.error('❌ Erro ao verificar vídeos pendentes:', error.message);
+        // Não interrompe a inicialização, apenas loga o erro
       }
     } catch (error: any) {
       this.logger.error('❌ Erro ao carregar dados iniciais:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Re-enfileira vídeos travados (processing/pending) ao iniciar
+   */
+  private async requeueStuckVideos(): Promise<void> {
+    const stuckVideos = await this.videoRepository.getStuckVideos();
+    if (stuckVideos.length === 0) {
+      this.logger.info('Nenhum vídeo travado encontrado para re-enfileirar.');
+      return;
+    }
+    this.logger.info(`Re-enfileirando ${stuckVideos.length} vídeos travados...`);
+    for (const video of stuckVideos) {
+      try {
+        await this.transcriptionService.enqueueVideo({
+          taskId: `requeue-${video.videoId}`,
+          videoId: video.videoId,
+          webhookUrl: process.env.WEBHOOK_URL || '',
+          email: video.userEmail,
+          folderId: video.pastaId
+        });
+        this.logger.info(`Vídeo ${video.videoId} re-enfileirado com sucesso.`);
+      } catch (err: any) {
+        this.logger.error(`Erro ao re-enfileirar vídeo ${video.videoId}:`, err);
+      }
     }
   }
 

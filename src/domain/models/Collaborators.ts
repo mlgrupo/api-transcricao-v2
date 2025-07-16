@@ -17,6 +17,12 @@ export class Collaborator {
   @Column({ nullable: true, type: "varchar" })
   folderRootName?: string;
 
+  @Column({ nullable: true, type: "varchar" })
+  password?: string;
+
+  @Column({ default: false, type: "boolean" })
+  isAdmin!: boolean;
+
   @CreateDateColumn({ name: "created_at" })
   createdAt!: Date;
 

@@ -1,0 +1,7 @@
+pyannote.audio>=3.1
+# Dependências recomendadas
+numpy
+scipy
+torch
+torchaudio
+# Para evitar conflitos, não inclua typer aqui 

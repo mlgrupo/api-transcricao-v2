@@ -4,65 +4,91 @@ import { CollaboratorService } from '../../domain/services/collaborator-service'
 import { VideoService } from '../../domain/services/video-service';
 import { TokenManager } from '../../infrastructure/auth/token-manager';
 import { TranscriptionQueue } from '../transcription/transcription-queue';
+import { ConfigRepository } from '../../data/repositories/config-repository';
+import { WebhookService } from '../../infrastructure/webhook/webhook-sender';
 
 export class DriveWatcher {
-  private FOLDER_NAME: string = process.env.ROOT_FOLDER_NAME || 'Meet Recordings';
+  // Removido fallback para valor padrão, sempre buscar do banco
   private isScanning: boolean = false; // Adicionado para evitar duplicação
   private thresholdDate?: string; // nova propriedade para armazenar a data limite
+  private configRepo = new ConfigRepository(new Logger());
 
   constructor(
     private logger: Logger,
     private collaboratorService: CollaboratorService,
     private videoService: VideoService,
     private tokenManager: TokenManager,
-    private transcriptionQueue: TranscriptionQueue
+    private transcriptionQueue: TranscriptionQueue,
+    private webhookService: WebhookService // NOVO
   ) { }
 
-  // Novo método para setar a data limite
+  /**
+   * Define a data limite para filtrar vídeos (apenas vídeos criados após esta data)
+   */
   public setThresholdDate(threshold: Date): void {
     this.thresholdDate = threshold.toISOString();
     this.logger.info(`Threshold date set to: ${this.thresholdDate}`);
   }
 
   /**
-   * Escaneia pastas de todos os usuários procurando por vídeos para transcever
+   * Polling leve: busca apenas vídeos criados após o último vídeo salvo para cada pasta/usuário
    */
-  public async scanAllUsersFolders(): Promise<void> {
+  public async pollNewVideos(): Promise<void> {
     if (this.isScanning) {
-      this.logger.warn('Escaneamento já em andamento. Ignorando nova execução.');
+      this.logger.warn('Polling já em andamento. Ignorando nova execução.');
       return;
     }
-
-    this.isScanning = true; // Bloqueia novas execuções
+    this.isScanning = true;
     try {
+      // Garantir que só 'Meet Recordings' esteja cadastrada como pasta padrão
+      let foldersConfig = await this.configRepo.getConfig('root_folder');
+      let folders: string[] = [];
+      if (Array.isArray(foldersConfig)) {
+        folders = foldersConfig;
+      } else if (typeof foldersConfig === 'string') {
+        folders = [foldersConfig];
+      } else {
+        folders = [];
+      }
+      // Se houver mais de uma pasta, manter apenas a primeira
+      if (folders.length > 1) {
+        folders = [folders[0]];
+        // Atualiza config para garantir consistência
+        await this.configRepo.setRootFolders(folders, undefined);
+      }
+      if (folders.length === 0) {
+        this.logger.warn('Nenhuma pasta raiz configurada no banco de dados!');
+        return;
+      }
+
       // Obter todos os colaboradores ativos
-      const collaborators = await this.collaboratorService.getAllActiveCollaborators();
-      this.logger.info(`Encontrados ${collaborators.length} colaboradores ativos`);
+      let collaborators;
+      try {
+        collaborators = await this.collaboratorService.getAllActiveCollaborators();
+        this.logger.info(`Encontrados ${collaborators.length} colaboradores ativos`);
+      } catch (error: any) {
+        this.logger.error('Erro ao carregar colaboradores:', error.message);
+        return;
+      }
 
       for (const collaborator of collaborators) {
         const { userId, email, accessToken, refreshToken, expiryDate } = collaborator;
-        this.logger.info(`➡️ Processando colaborador: ${email}`);
-
+        this.logger.info(`➡️ Polling para colaborador: ${email}`);
         try {
           // Verificar se o token está expirado
           const isTokenExpired = expiryDate && Date.now() > expiryDate;
           let currentAccessToken = accessToken;
           let currentRefreshToken = refreshToken;
 
-          // Se o token expirou, renovar
           if (isTokenExpired) {
             if (!refreshToken) {
               throw new Error(`Usuário ${email} está sem refresh_token!`);
             }
-
             this.logger.info(`Token expirado para ${email}, renovando...`);
             const refreshed = await this.tokenManager.refreshTokenIfNeeded(email);
-
             if (!refreshed) {
               throw new Error(`Falha ao renovar token para ${email}`);
             }
-
-            // Buscar tokens atualizados
             const updatedTokens = await this.collaboratorService.getUserTokens(email);
             if (updatedTokens) {
               currentAccessToken = updatedTokens.accessToken;
@@ -72,115 +98,150 @@ export class DriveWatcher {
             }
           }
 
-          // Criar cliente OAuth2 com os tokens atualizados
           const oauth2Client = this.tokenManager.createOAuth2Client(currentAccessToken, currentRefreshToken);
           const drive = google.drive({ version: 'v3', auth: oauth2Client });
 
-          // Escanear pasta 'meet' (ou qualquer nome configurado)
-          this.logger.info(`Escaneando pasta '${this.FOLDER_NAME}' para o usuário: ${email}`);
-
-          // Buscar pasta "meet"
-          const folderRes = await drive.files.list({
-            q: `name='${this.FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed = false`,
-            fields: 'files(id, name, mimeType, createdTime, modifiedTime)',
-            spaces: 'drive',
-          });
-
-          // Verificar se a pasta existe
-          if (!folderRes.data.files || folderRes.data.files.length === 0) {
-            this.logger.warn(`Pasta '${this.FOLDER_NAME}' não encontrada para ${email}`);
-            continue;
-          }
-
-          const folderId = folderRes.data.files[0].id;
-
-          // Modificar a query para filtrar vídeos com createdTime >= thresholdDate (se definida)
-          let query = `'${folderId}' in parents and mimeType contains 'video/' and trashed = false`;
-          if (this.thresholdDate) {
-            query += ` and createdTime >= '${this.thresholdDate}'`;
-          }
-          const videosRes = await drive.files.list({
-            q: query,
-            fields: 'files(id, name, mimeType, createdTime, modifiedTime, parents)'
-          });
-
-          const videoCount = videosRes.data.files?.length || 0;
-          this.logger.info(`📼 Vídeos encontrados: ${videoCount}`);
-
-          // Logar os IDs dos vídeos encontrados
-          if (videosRes.data.files) {
-            this.logger.info("IDs dos vídeos encontrados:", {
-              videoIds: videosRes.data.files.map(file => file.id),
-            });
-          }
-
-          // Salvar vídeos no banco e retornar apenas os novos
-          const savedVideos = await this.videoService.insertVideos(
-            (videosRes.data.files || []).map(file => ({
-              id: file.id || undefined,
-              name: file.name || undefined,
-              mimeType: file.mimeType || undefined,
-              createdTime: file.createdTime || undefined,
-              parents: file.parents || undefined
-            })),
-            email,
-            userId
-          );
-
-          // Filtrar vídeos que já foram processados
-          const unprocessedVideos = savedVideos.filter(video => !video.transcrito && !video.enfileirado);
-
-          if (unprocessedVideos.length === 0) {
-            this.logger.info(`Nenhum vídeo novo ou pendente encontrado para ${email}`);
-            continue;
-          }
-
-          this.logger.info(`🆕 ${unprocessedVideos.length} novos vídeos encontrados para ${email}`);
-
-          // Enfileirar vídeos para transcrição
-          for (const video of unprocessedVideos) {
-            if (!video.userEmail) {
-              this.logger.error(`Email é obrigatório para enfileirar o vídeo ${video.videoId}`);
-              continue; // Pula para o próximo vídeo
+          for (const folderInput of folders) {
+            let folderId: string | null = null;
+            let folderName: string | undefined = folderInput;
+            const linkMatch = String(folderInput).match(/folders\/([a-zA-Z0-9_-]+)/);
+            if (linkMatch) {
+              folderId = linkMatch[1];
+              folderName = undefined;
+            } else if (/^[a-zA-Z0-9_-]{10,}$/.test(folderInput)) {
+              folderId = folderInput;
+              folderName = undefined;
             }
-
-            // Usar o ID do usuário + ID do vídeo como identificador único da tarefa
-            const taskId = `${userId}-${video.videoId}`;
-
-            // Registrar vídeo como enfileirado no banco
-            try {
-              await this.videoService.markVideoAsQueued(video.videoId);
-            } catch (error: any) {
-              this.logger.error(`Erro ao marcar vídeo ${video.videoId} como enfileirado:`, error);
-              // Continua mesmo com erro, para tentar enfileirar
-            }
-
-            // Adicionar à fila de transcrição
-            this.transcriptionQueue.add(
-              taskId,
-              {
-                videoId: video.videoId,
-                webhookUrl: process.env.WEBHOOK_URL || '',
-                email: video.userEmail,
-                folderId: video.pastaId
+            if (!folderId && folderName) {
+              this.logger.info(`Buscando pasta '${folderName}' para o usuário: ${email}`);
+              try {
+                const folderRes = await drive.files.list({
+                  q: `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed = false`,
+                  fields: 'files(id, name, mimeType, createdTime, modifiedTime)',
+                  spaces: 'drive',
+                });
+                if (!folderRes.data.files || folderRes.data.files.length === 0) {
+                  this.logger.warn(`Pasta '${folderName}' não encontrada para ${email}`);
+                  continue;
+                }
+                folderId = folderRes.data.files[0].id || null;
+              } catch (error: any) {
+                this.logger.warn(`Erro ao buscar pasta '${folderName}' para ${email}: ${error.message}`);
+                continue;
               }
-            );
+            }
+            if (!folderId) {
+              this.logger.warn(`Não foi possível determinar o ID da pasta para '${folderInput}' (${email})`);
+              continue;
+            }
+            if (!/^[a-zA-Z0-9_-]{10,}$/.test(folderId)) {
+              this.logger.warn(`ID de pasta inválido: ${folderId} para ${email}`);
+              continue;
+            }
 
-            this.logger.info(`🎬 Vídeo enfileirado para transcrição: ${video.videoName} (${video.videoId})`);
+            try {
+              // Buscar a data do último vídeo salvo para este usuário/pasta
+              const lastVideo = await this.videoService.getLastVideoByUserAndFolder(userId, folderId);
+              let lastCreatedTime: string | undefined = undefined;
+              if (lastVideo?.createdTime) {
+                if (typeof lastVideo.createdTime === 'string') {
+                  const parsedDate = new Date(lastVideo.createdTime);
+                  if (!isNaN(parsedDate.getTime())) {
+                    lastCreatedTime = parsedDate.toISOString();
+                  } else {
+                    lastCreatedTime = lastVideo.createdTime;
+                  }
+                } else if (lastVideo.createdTime instanceof Date) {
+                  lastCreatedTime = lastVideo.createdTime.toISOString();
+                }
+              }
+              if (!lastCreatedTime) {
+                // Se não houver vídeo anterior, busca só os últimos 5 minutos para evitar flood
+                const now = new Date();
+                now.setMinutes(now.getMinutes() - 5);
+                lastCreatedTime = now.toISOString();
+              }
+
+              // Garante que a data está no formato RFC 3339 (ISO 8601)
+              if (typeof lastCreatedTime === 'string') {
+                const parsedDate = new Date(lastCreatedTime);
+                if (!isNaN(parsedDate.getTime())) {
+                  lastCreatedTime = parsedDate.toISOString();
+                }
+              }
+
+              let query = `'${folderId}' in parents and mimeType contains 'video/' and trashed = false and createdTime > '${lastCreatedTime}'`;
+              const videosRes = await drive.files.list({
+                q: query,
+                fields: 'files(id, name, mimeType, createdTime, modifiedTime, parents, size, owners, webViewLink, webContentLink)',
+              });
+              const newVideos = videosRes.data.files || [];
+              if (newVideos.length === 0) {
+                this.logger.info(`Nenhum vídeo novo encontrado para ${email} na pasta '${folderInput}'`);
+                continue;
+              }
+              this.logger.info(`🆕 ${newVideos.length} novos vídeos encontrados para ${email} na pasta '${folderInput}'`);
+              // Salvar vídeos e enviar para o webhook
+              for (const file of newVideos) {
+                const savedVideos = await this.videoService.insertVideos([
+                  {
+                    id: file.id || undefined,
+                    name: file.name || undefined,
+                    mimeType: file.mimeType || undefined,
+                    createdTime: file.createdTime ? (typeof file.createdTime === 'string' ? file.createdTime : new Date(file.createdTime).toISOString()) : undefined,
+                    parents: file.parents || undefined,
+                  }
+                ], email, userId);
+                // Enfileirar para transcrição cada vídeo salvo
+                for (const saved of savedVideos) {
+                  if (saved && saved.videoId) {
+                    // Atualiza status para 'processing' imediatamente
+                    await this.videoService.markVideoAsProcessing(saved.videoId);
+                    const taskId = `${email}-${saved.videoId}`;
+                    this.transcriptionQueue.add(taskId, {
+                      videoId: saved.videoId,
+                      webhookUrl: process.env.WEBHOOK_URL || '',
+                      email: email,
+                      folderId: folderId,
+                    });
+                  }
+                }
+                // Payload para o webhook
+                const payload = {
+                  videoId: file.id,
+                  name: file.name,
+                  mimeType: file.mimeType,
+                  createdTime: file.createdTime ? (typeof file.createdTime === 'string' ? file.createdTime : new Date(file.createdTime).toISOString()) : undefined,
+                  parents: file.parents,
+                  owners: file.owners,
+                  webViewLink: file.webViewLink,
+                  webContentLink: file.webContentLink,
+                  userEmail: email,
+                  userId: userId,
+                  folderId: folderId,
+                  folderName: folderName,
+                  status: 'new_video_detected', // Necessário para o tipo WebhookData
+                };
+                await this.webhookService.sendToAllWebhooks('new_video_detected', payload, this.configRepo);
+              }
+            } catch (error: any) {
+              if (error?.response?.status === 404 || (error.message && error.message.includes('File not found'))) {
+                this.logger.warn(`Pasta não encontrada ou sem permissão: ${folderInput} (${folderId}) para ${email}`);
+                continue;
+              } else {
+                this.logger.error(`Erro ao buscar vídeos na pasta '${folderInput}' para ${email}:`, error);
+                continue;
+              }
+            }
           }
-
         } catch (error: any) {
-          this.logger.error(`Erro ao escanear pastas para ${email}:`, {
-            error: error.message,
-            stack: error.stack
-          });
+          this.logger.error(`Erro no polling para ${email}:`, error);
         }
       }
-
     } catch (error: any) {
-      this.logger.error('Erro ao carregar colaboradores:', error.message);
+      this.logger.error('Erro no polling geral:', error);
     } finally {
-      this.isScanning = false; // Libera o bloqueio após a execução
+      this.isScanning = false;
     }
   }
 
@@ -218,13 +279,5 @@ export class DriveWatcher {
       this.logger.error(`Erro ao escanear pasta do usuário ${email}:`, error);
       return false;
     }
-  }
-
-  /**
-   * Define o nome da pasta a ser monitorada
-   */
-  public setFolderName(folderName: string): void {
-    this.FOLDER_NAME = folderName;
-    this.logger.info(`Nome da pasta para monitoramento alterado para: ${folderName}`);
   }
 }

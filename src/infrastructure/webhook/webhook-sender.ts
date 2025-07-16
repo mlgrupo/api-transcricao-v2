@@ -1,4 +1,5 @@
 import { Logger } from "../../utils/logger";
+import { ConfigRepository } from '../../data/repositories/config-repository';
 
 interface WebhookData {
   status: string;
@@ -64,6 +65,19 @@ export class WebhookService {
     } catch (error: any) {
       this.logger.error('Erro ao enviar notificação webhook:', error);
       return false;
+    }
+  }
+
+  public async sendToAllWebhooks(event: string, data: WebhookData, configRepo: ConfigRepository): Promise<void> {
+    const webhooks = await configRepo.getWebhooks();
+    const activeWebhooks = (webhooks || []).filter(wh => wh.active && Array.isArray(wh.events) && wh.events.includes(event));
+    for (const webhook of activeWebhooks) {
+      try {
+        await this.sendNotification(webhook.url, { ...data, status: event });
+        this.logger.info(`Webhook (${event}) enviado para ${webhook.url}`);
+      } catch (err: any) {
+        this.logger.error(`Erro ao enviar webhook (${event}) para ${webhook.url}:`, err);
+      }
     }
   }
 

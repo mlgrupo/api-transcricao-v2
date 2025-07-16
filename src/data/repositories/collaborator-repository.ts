@@ -3,6 +3,7 @@ import { AppDataSource } from "../data-source";
 import { Collaborator } from "../../domain/models/Collaborators";
 import { Credential } from "../../domain/models/Credentials";
 import { Logger } from "../../utils/logger";
+import { v4 as uuidv4 } from 'uuid';
 
 export class CollaboratorRepository {
   private repository: Repository<Collaborator>;
@@ -264,6 +265,49 @@ export class CollaboratorRepository {
     } catch (error: any) {
       this.logger.error("Erro ao atualizar colaborador:", error);
       throw error;
+    }
+  }
+
+  public async getCollaboratorByEmail(email: string): Promise<Collaborator | null> {
+    try {
+      return await this.repository.findOne({ where: { email } });
+    } catch (error: any) {
+      this.logger.error('Erro ao buscar colaborador por email:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Cria um novo colaborador manualmente (admin)
+   */
+  public async createCollaborator(data: { name: string; email: string; password: string; isAdmin?: boolean }): Promise<void> {
+    try {
+      await this.repository.save({
+        userId: uuidv4(),
+        name: data.name,
+        email: data.email,
+        password: data.password,
+        isAdmin: !!data.isAdmin
+      });
+      this.logger.info(`Colaborador criado manualmente: ${data.email}`);
+    } catch (error: any) {
+      this.logger.error('Erro ao criar colaborador manualmente:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Verifica se o usuário tem credencial ativa (Drive conectado)
+   */
+  public async hasActiveDrive(userId: string): Promise<boolean> {
+    try {
+      const cred = await this.credentialRepository.findOne({
+        where: { userId, ativo: true }
+      });
+      return !!cred;
+    } catch (error: any) {
+      this.logger.error('Erro ao verificar drive conectado:', error);
+      return false;
     }
   }
 }

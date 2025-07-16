@@ -6,7 +6,7 @@ import { Logger } from '../../utils/logger';
 export class AudioProcessor {
   constructor(private logger: Logger) {}
 
-  public async convertToMp3(videoPath: string, audioPath: string): Promise<string> {
+  public async convertToMp3(videoPath: string, audioPath: string, cancelObj?: { cancelled: boolean }): Promise<string> {
     try {
       this.logger.info('Iniciando conversão para MP3 via fluent‑ffmpeg...', { videoPath, audioPath });
       
@@ -22,14 +22,29 @@ export class AudioProcessor {
       
       // Usar fluent‑ffmpeg para converter o vídeo para MP3
       await new Promise<void>((resolve, reject) => {
-        ffmpeg(videoPath)
+        const proc = ffmpeg(videoPath)
           .noVideo()
           .audioCodec('libmp3lame')
           .audioBitrate('128k')
           .output(audioPath)
-          .on('end', () => resolve())
-          .on('error', (err) => reject(err))
-          .run();
+          .on('end', () => {
+            clearInterval(interval);
+            resolve();
+          })
+          .on('error', (err) => {
+            clearInterval(interval);
+            reject(err);
+          });
+        // Checar cancelamento periodicamente
+        const interval = setInterval(() => {
+          if (cancelObj?.cancelled && (proc as any).ffmpegProc) {
+            (proc as any).ffmpegProc.kill('SIGKILL');
+            clearInterval(interval);
+            this.logger.info('Conversão para MP3 cancelada pelo usuário', { videoPath });
+            reject(new Error('Conversão para MP3 cancelada pelo usuário'));
+          }
+        }, 300);
+        proc.run();
       });
       
       // Verificar se o arquivo MP3 foi gerado
@@ -51,6 +66,10 @@ export class AudioProcessor {
         videoPath,
         audioPath
       });
+      // Se cancelado, remover arquivo parcial
+      if (cancelObj?.cancelled) {
+        try { await fs.unlink(audioPath); } catch {}
+      }
       throw new Error(`Erro na conversão para MP3: ${error.message}`);
     }
   }

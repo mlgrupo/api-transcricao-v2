@@ -2,6 +2,8 @@ import { Request, Response } from "express";
 import { GoogleAuthService } from "../../infrastructure/auth/google-auth";
 import { CollaboratorService } from "../../domain/services/collaborator-service";
 import { Logger } from "../../utils/logger";
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 
 export class AuthController {
   constructor(
@@ -10,7 +12,7 @@ export class AuthController {
     private logger: Logger
   ) {}
 
-  public async googleCallback(req: Request, res: Response): Promise<Response> {
+  public async googleCallback(req: Request, res: Response): Promise<void> {
     try {
       this.logger.info("Entrou no callback do Google");
       
@@ -18,7 +20,8 @@ export class AuthController {
       
       if (!code) {
         this.logger.error("Código de autorização ausente na requisição");
-        return res.status(400).json({ error: "Missing code parameter" });
+        res.status(400).json({ error: "Missing code parameter" });
+        return;
       }
 
       this.logger.info(`Código de autorização recebido (tamanho: ${code.length} caracteres)`);
@@ -29,21 +32,24 @@ export class AuthController {
         // Validar domínio do email
         if (!userInfo.email) {
           this.logger.error("Email não retornado pelo Google");
-          return res.status(400).json({ error: "Email not returned from Google" });
+          res.status(400).json({ error: "Email not returned from Google" });
+          return;
         }
 
         const emailDomain = userInfo.email.split('@')[1];
         if (emailDomain !== "reconectaoficial.com.br") {
           this.logger.error(`Domínio de email não autorizado: ${emailDomain}`);
-          return res.status(403).json({ 
+          res.status(403).json({ 
             error: "Invalid domain",
             message: `O email ${userInfo.email} não pertence ao domínio reconectaoficial.com.br`
           });
+          return;
         }
 
         if (!tokens.access_token) {
           this.logger.error("Token de acesso não retornado pelo Google");
-          return res.status(500).json({ error: "No access token returned from Google" });
+          res.status(500).json({ error: "No access token returned from Google" });
+          return;
         }
 
         // Salvar ou atualizar credenciais
@@ -60,12 +66,35 @@ export class AuthController {
             token_type: tokens.token_type
           });
 
+          // Buscar colaborador para pegar isAdmin
+          const collaborator = await this.collaboratorService.getCollaboratorByEmail(userInfo.email);
+          const isAdmin = collaborator?.isAdmin || false;
+
+          // Gerar JWT igual ao login tradicional
+          const token = jwt.sign(
+            {
+              userId: userInfo.id,
+              email: userInfo.email,
+              name: userInfo.name,
+              isAdmin,
+              picture: userInfo.picture,
+            },
+            process.env.JWT_SECRET || 'secret',
+            { expiresIn: '12h' }
+          );
+
           this.logger.info(`Autenticação bem-sucedida para: ${userInfo.email}`);
-          return res.status(200).json({
-            message: "Authentication successful",
-            userId: userInfo.id,
-            email: userInfo.email,
+          res.status(200).json({
+            token,
+            user: {
+              userId: userInfo.id,
+              name: userInfo.name,
+              email: userInfo.email,
+              isAdmin,
+              picture: userInfo.picture,
+            }
           });
+          return;
         } catch (credError: any) {
           // Tratar erros específicos de salvamento de credenciais
           this.logger.error(`Erro ao salvar/atualizar credenciais: ${credError.message}`);
@@ -73,16 +102,18 @@ export class AuthController {
           if (credError.message.includes('duplicate key')) {
             // Este erro não deve mais acontecer com a nova implementação,
             // mas mantemos por segurança
-            return res.status(409).json({
+            res.status(409).json({
               error: "Duplicate user",
               message: "O usuário já existe. Tente novamente."
             });
+            return;
           }
           
-          return res.status(500).json({
+          res.status(500).json({
             error: "Credential storage error",
             message: credError.message
           });
+          return;
         }
       } catch (error: any) {
         // Verificar erro específico de invalid_grant
@@ -94,26 +125,129 @@ export class AuthController {
             originalError: errorMessage
           });
           
-          return res.status(400).json({
+          res.status(400).json({
             error: "invalid_grant",
             message: "O código de autorização expirou ou já foi usado. Por favor, tente autenticar novamente."
           });
+          return;
         }
         
         this.logger.error("Erro ao trocar código por tokens:", error.message);
-        return res.status(500).json({
+        res.status(500).json({
           error: "Token exchange error",
           message: error.message,
         });
+        return;
       }
     } catch (outerError: any) {
       this.logger.error(`Erro não tratado no callback do Google: ${outerError.message}`, {
         stack: outerError.stack
       });
-      return res.status(500).json({
+      res.status(500).json({
         error: "Unhandled error in Google callback",
         message: outerError.message,
       });
+    }
+  }
+
+  public async login(req: Request, res: Response): Promise<void> {
+    try {
+      const { email, password } = req.body;
+      if (!email || !password) {
+        res.status(400).json({ error: 'Email e senha são obrigatórios.' });
+        return;
+      }
+      // Buscar colaborador pelo email
+      const collaborator = await this.collaboratorService.getCollaboratorByEmail(email);
+      if (!collaborator || !collaborator.password) {
+        res.status(401).json({ error: 'Usuário ou senha inválidos.' });
+        return;
+      }
+      // Validar senha
+      const valid = await bcrypt.compare(password, collaborator.password);
+      if (!valid) {
+        res.status(401).json({ error: 'Usuário ou senha inválidos.' });
+        return;
+      }
+      // Gerar JWT
+      const token = jwt.sign(
+        {
+          userId: collaborator.userId,
+          email: collaborator.email,
+          name: collaborator.name,
+          isAdmin: collaborator.isAdmin,
+        },
+        process.env.JWT_SECRET || 'secret',
+        { expiresIn: '12h' }
+      );
+      res.status(200).json({
+        token,
+        user: {
+          userId: collaborator.userId,
+          name: collaborator.name,
+          email: collaborator.email,
+          isAdmin: collaborator.isAdmin,
+          picture: collaborator.picture,
+        }
+      });
+    } catch (error: any) {
+      this.logger.error('Erro no login tradicional:', error.message);
+      res.status(500).json({ error: 'Erro interno ao fazer login.' });
+    }
+  }
+
+  public async createUser(req: Request, res: Response): Promise<void> {
+    try {
+      // Verifica se o usuário autenticado é admin
+      const user = req.user as any;
+      if (!user || !user.isAdmin) {
+        return res.status(403).json({ error: 'Acesso negado. Apenas administradores podem criar usuários.' });
+      }
+      const { name, email, password, isAdmin } = req.body;
+      if (!name || !email || !password) {
+        return res.status(400).json({ error: 'Nome, email e senha são obrigatórios.' });
+      }
+      // Verifica se já existe usuário com esse email
+      const existing = await this.collaboratorService.getCollaboratorByEmail(email);
+      if (existing) {
+        return res.status(409).json({ error: 'Já existe um usuário com esse email.' });
+      }
+      // Cria o usuário
+      const hashedPassword = await bcrypt.hash(password, 10);
+      await this.collaboratorService.createCollaborator({
+        name,
+        email,
+        password: hashedPassword,
+        isAdmin: !!isAdmin
+      });
+      return res.status(201).json({ message: 'Usuário criado com sucesso.' });
+    } catch (error: any) {
+      this.logger.error('Erro ao criar usuário:', error.message);
+      return res.status(500).json({ error: 'Erro interno ao criar usuário.' });
+    }
+  }
+
+  // Adicionar método para retornar dados do usuário autenticado com driveConnected
+  public static async getMe(req: Request, res: Response) {
+    try {
+      // @ts-ignore
+      const user = req.user;
+      if (!user) return res.status(401).json({ error: 'Não autenticado.' });
+      // Buscar colaborador completo
+      const collaboratorService = req.app.get('collaboratorService');
+      const collaborator = await collaboratorService.getCollaboratorByEmail(user.email);
+      if (!collaborator) return res.status(404).json({ error: 'Usuário não encontrado.' });
+      // Retornar dados com driveConnected
+      return res.status(200).json({
+        userId: collaborator.userId,
+        name: collaborator.name,
+        email: collaborator.email,
+        isAdmin: collaborator.isAdmin,
+        picture: collaborator.picture,
+        driveConnected: collaborator.driveConnected || false
+      });
+    } catch (error: any) {
+      return res.status(500).json({ error: 'Erro ao buscar usuário.' });
     }
   }
 }

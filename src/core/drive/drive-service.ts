@@ -3,6 +3,8 @@ import { createWriteStream } from 'fs';
 import path from 'path';
 import { Logger } from '../../utils/logger';
 import { IDriveService } from './interfaces/IDriveResources';
+import { Document, Packer, Paragraph, TextRun } from 'docx';
+import { Readable } from 'stream';
 
 interface findedFolder {
   folderId: string;
@@ -14,7 +16,7 @@ interface findedFolder {
 export class DriveService implements IDriveService {
   constructor(private logger: Logger) { }
 
-  public async downloadVideo(drive: any, videoId: string, outputPath: string): Promise<void> {
+  public async downloadVideo(drive: any, videoId: string, outputPath: string, cancelObj?: { cancelled: boolean }): Promise<void> {
     try {
       this.logger.info('Iniciando download de vídeo do Google Drive', { videoId, outputPath });
       const dir = path.dirname(outputPath);
@@ -70,6 +72,13 @@ export class DriveService implements IDriveService {
 
             response.data
               .on('data', (chunk: Buffer) => {
+                if (cancelObj?.cancelled) {
+                  clearTimeout(timeout);
+                  dest.close();
+                  this.logger.info('Download cancelado pelo usuário', { videoId });
+                  reject(new Error('Download cancelado pelo usuário'));
+                  return;
+                }
                 downloadedBytes += chunk.length;
                 const percent = Math.round((downloadedBytes / fileSize) * 100);
                 if (percent >= lastLoggedPercent + 5) {
@@ -104,6 +113,11 @@ export class DriveService implements IDriveService {
 
             response.data.pipe(dest);
           });
+          // Se cancelado, remover arquivo parcial
+          if (cancelObj?.cancelled) {
+            try { await fs.unlink(outputPath); } catch {}
+            throw new Error('Download cancelado pelo usuário');
+          }
           return;
         } catch (error: any) {
           this.logger.error(`Erro na tentativa ${attempts}/${maxAttempts} de download:`, { error: error.message, videoId });
@@ -160,6 +174,20 @@ export class DriveService implements IDriveService {
   public async uploadFile(drive: any, folderId: string, filename: string, mimeType: string, bodyContent: string): Promise<void> {
     try {
       this.logger.info('Enviando arquivo para o Google Drive', { filename, folderId });
+      let mediaBody: Buffer | string | NodeJS.ReadableStream = bodyContent;
+      if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+        // Converter string para DOCX usando a biblioteca docx
+        const doc = new Document({
+          sections: [
+            {
+              properties: {},
+              children: bodyContent.split('\n').map((line: string) => new Paragraph(line)),
+            },
+          ],
+        });
+        const buffer = await Packer.toBuffer(doc);
+        mediaBody = Readable.from(buffer);
+      }
       await drive.files.create({
         requestBody: {
           name: filename,
@@ -168,7 +196,7 @@ export class DriveService implements IDriveService {
         },
         media: {
           mimeType,
-          body: bodyContent
+          body: mediaBody
         }
       });
       this.logger.info('Arquivo enviado com sucesso', { filename });
@@ -232,6 +260,25 @@ export class DriveService implements IDriveService {
 
     } catch (error: any) {
       this.logger.error('Erro ao verificar arquivo no Google Drive:', { error: error.message, fileId });
+      throw error;
+    }
+  }
+
+  /**
+   * Busca arquivos que contenham parte do nome em uma pasta específica do Drive
+   */
+  public async searchFilesByNamePart(drive: any, namePart: string, parentFolderId: string): Promise<any[]> {
+    try {
+      this.logger.info('Buscando arquivos por parte do nome no Google Drive', { namePart, parentFolderId });
+      const query = `name contains '${namePart}' and '${parentFolderId}' in parents and trashed = false`;
+      const res = await drive.files.list({
+        q: query,
+        fields: 'files(id, name, mimeType, createdTime, modifiedTime, parents)',
+        spaces: 'drive',
+      });
+      return res.data.files || [];
+    } catch (error: any) {
+      this.logger.error('Erro ao buscar arquivos por nome no Google Drive:', { error: error.message, namePart, parentFolderId });
       throw error;
     }
   }
