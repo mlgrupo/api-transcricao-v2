@@ -1,12 +1,14 @@
-#este arquivo é para subir um banco postgres para o ambiente de desenvolvimento
+version: '3.8'
+
 services:
-  postgres:
-    container_name: ambiente_dev
-    image: postgres:14
-    restart: always
-    environment:
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_USER: postgres
-      POSTGRES_DB: db-ia
+  backend:
+    container_name: backend_api
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
     ports:
-      - "5432:5432"
+      - "8080:8080" # Altere para a porta que seu backend expõe
+    restart: always
+    depends_on: []
