@@ -77,12 +77,14 @@ export default function AdminPanel() {
       const res = await fetchWithAuth(`${API_BASE_URL}/api/videos`);
       if (res.ok) {
         const data = await res.json();
-        setVideos(data);
+        setVideos(Array.isArray(data) ? data : []);
       } else {
         setError("Erro ao buscar vídeos.");
+        setVideos([]);
       }
     } catch {
       setError("Erro de conexão.");
+      setVideos([]);
     } finally {
       setLoading(false);
     }
@@ -94,9 +96,13 @@ export default function AdminPanel() {
       const res = await fetchWithAuth(`${API_BASE_URL}/api/drives`);
       if (res.ok) {
         const data = await res.json();
-        setUsers(data);
+        setUsers(Array.isArray(data) ? data : []);
+      } else {
+        setUsers([]);
       }
-    } catch {}
+    } catch {
+      setUsers([]);
+    }
   };
 
   // Buscar webhooks
@@ -105,9 +111,13 @@ export default function AdminPanel() {
       const res = await fetchWithAuth(`${API_BASE_URL}/api/config/webhooks`);
       if (res.ok) {
         const data = await res.json();
-        setWebhooks(data);
+        setWebhooks(Array.isArray(data) ? data : []);
+      } else {
+        setWebhooks([]);
       }
-    } catch {}
+    } catch {
+      setWebhooks([]);
+    }
   };
 
   useEffect(() => {
@@ -391,7 +401,7 @@ export default function AdminPanel() {
                 </tr>
               </thead>
               <tbody>
-                {users.map(user => (
+                {Array.isArray(users) && users.map(user => (
                   <tr key={user.id} style={{ borderBottom: '1px solid rgba(76, 0, 13, 0.3)' }}>
                     <td style={{ padding: 12, color: '#FFE1A6' }}>{user.name}</td>
                     <td style={{ padding: 12, color: '#FFE1A6' }}>{user.email}</td>
@@ -427,7 +437,7 @@ export default function AdminPanel() {
         {error && <div style={{ color: "#FFE1A6", marginBottom: 24 }}>{error}</div>}
         {/* Seções por status */}
         {Object.entries({ processing: grouped.processing, pending: grouped.pending, cancelled: grouped.cancelled, completed: grouped.completed, failed: grouped.failed }).map(([status, vids]) => (
-          vids.length > 0 && (
+          Array.isArray(vids) && vids.length > 0 && (
             <div key={status} style={{ marginBottom: 48 }}>
               <h3 style={{ color: '#FFE1A6', fontWeight: 700, fontSize: "1.3rem", marginBottom: 16, textTransform: 'capitalize' }}>
                 {status.charAt(0).toUpperCase() + status.slice(1)} ({vids.length})
@@ -445,7 +455,7 @@ export default function AdminPanel() {
                     </tr>
                   </thead>
                   <tbody>
-                    {vids.map(video => (
+                    {Array.isArray(vids) && vids.map(video => (
                       <tr key={video.videoId} style={{ borderBottom: "1px solid rgba(76, 0, 13, 0.3)" }}>
                         <td style={{ padding: 10, color: '#FFE1A6' }}>{video.videoName}</td>
                         <td style={{ padding: 10, color: '#FFE1A6' }}>{video.userEmail || "-"}</td>
@@ -516,7 +526,7 @@ export default function AdminPanel() {
                   </tr>
                 </thead>
                 <tbody>
-                  {webhooks.map((wh, i) => (
+                  {Array.isArray(webhooks) && webhooks.map((wh, i) => (
                     <tr key={i} style={{ borderBottom: '1px solid rgba(76, 0, 13, 0.3)' }}>
                       <td style={{ padding: 12, color: '#FFE1A6' }}>{wh.name}</td>
                       <td style={{ padding: 12, color: '#FFE1A6' }}>{wh.url}</td>

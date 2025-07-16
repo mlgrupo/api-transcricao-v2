@@ -300,7 +300,8 @@ export class VideoProcessor {
 
       // Salvar a transcrição no banco
       // Se a transcrição for erro técnico, não salvar, marcar como erro e notificar
-      if (transcription && transcription.trim().startsWith('Este vídeo não pôde ser transcrito devido a um erro técnico')) {
+      if (transcription && transcription.trim().startsWith('Este vídeo não pôde ser transcrito devido a um erro técnico') ||
+          transcription && transcription.trim().startsWith('Não foi possível transcrever este vídeo automaticamente.')) {
         await this.videoRepository.updateProgress(videoId, 0, 'Erro técnico na transcrição');
         await this.videoRepository.markVideoAsCorrupted(videoId, transcription);
         this.logger.error('Erro técnico na transcrição, não será criado arquivo nem salvo texto.', { videoId, error: transcription });
@@ -474,14 +475,16 @@ export class VideoProcessor {
       }
 
       // Enviar webhook de transcrição concluída
-      const configRepo = new ConfigRepository(this.logger);
-      await this.webhookService.sendToAllWebhooks('transcription_completed', {
-        videoId,
-        userEmail,
-        transcription,
-        docFileName: transcriptionDocFileName,
-        status: 'transcription_completed',
-      }, configRepo);
+      if (transcription && transcription.trim() && !transcription.trim().startsWith('Não foi possível transcrever este vídeo automaticamente.') && !transcription.trim().startsWith('Este vídeo não pôde ser transcrito devido a um erro técnico')) {
+        const configRepo = new ConfigRepository(this.logger);
+        await this.webhookService.sendToAllWebhooks('transcription_completed', {
+          videoId,
+          userEmail,
+          transcription,
+          docFileName: transcriptionDocFileName,
+          status: 'transcription_completed',
+        }, configRepo);
+      }
 
       // *** Ajuste aqui: usar videoId em vez de audioPath para a limpeza dos arquivos temporários ***
       await this.cleanupTempFiles(videoId);
@@ -509,6 +512,57 @@ export class VideoProcessor {
         error.message.includes("Resposta vazia do Google Drive") ||
         error.message.includes("Arquivo baixado está vazio") ||
         error.message.includes("Não foi possível obter metadados do arquivo");
+
+      // NOVO: Detectar erro de credenciais inválidas do Google Drive
+      const isInvalidCredentials = error.message && error.message.toLowerCase().includes("invalid credentials");
+      if (isInvalidCredentials) {
+        const reconectarMsg = "Credenciais do Google Drive inválidas. Por favor, reconecte sua conta do Google Drive no painel de administração.";
+        this.logger.error("Usuário precisa reconectar o Google Drive!", { videoId, userEmail });
+        await this.videoRepository.markVideoAsCorrupted(videoId, reconectarMsg);
+        if (webhookUrl) {
+          await this.webhookService.sendNotification(webhookUrl, {
+            status: "error",
+            videoId,
+            error: reconectarMsg,
+            action: "reconnect_drive"
+          });
+        }
+        const configRepo = new ConfigRepository(this.logger);
+        await this.webhookService.sendToAllWebhooks('transcription_failed', {
+          videoId,
+          userEmail,
+          error: reconectarMsg,
+          status: 'transcription_failed',
+          action: 'reconnect_drive',
+        }, configRepo);
+        try {
+          this.logger.info("Limpando arquivos temporários após erro...", {
+            videoId,
+          });
+          return {
+            success: false,
+            error: reconectarMsg,
+            videoPath,
+            audioPath,
+            alreadyUploaded: true,
+          };
+        } catch (cleanupError: any) {
+          this.logger.error("Erro ao limpar arquivos temporários:", {
+            error: cleanupError,
+            videoId,
+          });
+          this.webhookService.sendNotification(webhookUrl, {
+            status: "error",
+            videoId,
+            error: cleanupError.message,
+            message:
+              "Erro ao limpar arquivos temporários, cuidado com o acumulo de pastas",
+          });
+        } finally {
+          await this.cleanupTempFiles(videoId);
+        }
+        return { success: false, error: reconectarMsg };
+      }
 
       if (isGoogleDriveFileError) {
         this.logger.info("Marcando vídeo como corrompido no banco de dados", {
