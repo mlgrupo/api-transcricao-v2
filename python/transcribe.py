@@ -111,8 +111,8 @@ class TranscriptionProcessor:
             logger.info("Rodando diarização com pyannote.audio...")
             diarization_segments: List[DiarizationSegment] = diarize_audio(temp_path)
             logger.info(f"{len(diarization_segments)} segmentos de locutores detectados.")
-            # Carregar modelo Whisper (otimizado para CPU)
-            model = self.load_model("base")  # Mudado de turbo para base (melhor para CPU)
+            # Carregar modelo Whisper (otimizado para máxima velocidade)
+            model = self.load_model("small")  # Small é mais rápido que turbo para CPU
             # Transcrever cada segmento
             formatted_segments = []
             for i, seg in enumerate(diarization_segments):
@@ -121,7 +121,7 @@ class TranscriptionProcessor:
                 with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as seg_file:
                     seg_audio.export(seg_file.name, format='wav')
                     seg_path = seg_file.name
-                # Transcrever segmento com configurações otimizadas para CPU
+                # Transcrever segmento com configurações otimizadas para máxima velocidade
                 result = model.transcribe(
                     seg_path,
                     language="pt",
@@ -132,9 +132,11 @@ class TranscriptionProcessor:
                     compression_ratio_threshold=2.4,
                     logprob_threshold=-1.0,
                     no_speech_threshold=0.6,
-                    condition_on_previous_text=True,  # Habilitado para melhor qualidade em CPU
-                    beam_size=1,  # Reduzido para CPU (padrão é 5)
-                    initial_prompt="Este é um áudio em português brasileiro."
+                    condition_on_previous_text=False,  # Desabilitado para máxima velocidade
+                    beam_size=1,  # Reduzido para máxima velocidade
+                    initial_prompt="Este é um áudio em português brasileiro.",
+                    num_workers=6,  # Usar 6 workers para paralelização
+                    best_of=1  # Reduzir busca para velocidade
                 )
                 os.unlink(seg_path)
                 processed_text = self.text_processor.clean_text(result["text"])

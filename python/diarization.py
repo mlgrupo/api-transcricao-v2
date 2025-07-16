@@ -39,7 +39,16 @@ def diarize_audio(audio_path: str) -> List[DiarizationSegment]:
             logger.error("Pipeline pyannote.audio retornou None! Verifique o token e dependências.")
             raise RuntimeError("Pipeline pyannote.audio retornou None! Verifique o token e dependências.")
         logger.info("Pipeline carregado com sucesso.")
-        diarization = pipeline(audio_path)
+        
+        # Configurações otimizadas para velocidade
+        diarization = pipeline(
+            audio_path,
+            min_speakers=1,  # Mínimo de locutores
+            max_speakers=10,  # Máximo de locutores (reduzir se necessário)
+            min_duration_on=0.5,  # Duração mínima de fala (reduzir para velocidade)
+            min_duration_off=0.5,  # Duração mínima de silêncio (reduzir para velocidade)
+        )
+        
         segments = []
         for turn, _, speaker in diarization.itertracks(yield_label=True):
             segments.append(DiarizationSegment(turn.start, turn.end, speaker))

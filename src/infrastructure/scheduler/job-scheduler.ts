@@ -21,9 +21,9 @@ export class JobScheduler {
   }
 
   private setupDriveWatcherJob(): void {
-    // Polling leve a cada 2 minutos (otimizado de 1 minuto)
+    // Polling leve a cada 5 minutos (otimizado para dar mais recursos à transcrição)
     const pollJob = new CronJob(
-      '*/2 * * * *',
+      '*/5 * * * *',
       async () => {
         this.logger.info('Iniciando polling leve de novos vídeos...');
         try {
@@ -41,9 +41,9 @@ export class JobScheduler {
   }
 
   private setupPendingVideosJob(): void {
-    // Verificar vídeos pendentes a cada 10 minutos (otimizado de 5 minutos)
+    // Verificar vídeos pendentes a cada 15 minutos (otimizado para dar mais recursos à transcrição)
     const pendingVideosJob = new CronJob(
-      '*/10 * * * *',
+      '*/15 * * * *',
       async () => {
         if (this.isCheckingPendingVideos) {
           this.logger.warn('Verificação de vídeos pendentes já em andamento. Ignorando nova execução.');

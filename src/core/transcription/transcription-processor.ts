@@ -43,9 +43,9 @@ export class TranscriptionProcessor {
     config: TranscriptionConfig = {}
   ) {
     this.config = {
-      maxWorkers: 4, // Ajustado para CPU-only (não sobrecarregar)
-      chunkDurationMs: 3 * 60 * 1000, // Reduzido de 5 para 3 minutos
-      maxMemoryChunks: 5, // Aumentado de 3 para 5
+      maxWorkers: parseInt(process.env.MAX_WORKERS || '8'), // Usar todos os 8 CPUs
+      chunkDurationMs: 1 * 60 * 1000, // Reduzido para 1 minuto (máxima paralelização)
+      maxMemoryChunks: 12, // Aumentado para mais chunks em memória
       enableNoiseReduction: true,
       enableSilenceRemoval: true,
       enableVolumeNormalization: true,
