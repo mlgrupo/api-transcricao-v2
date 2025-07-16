@@ -5,7 +5,6 @@ import { rateLimit } from 'express-rate-limit';
 import { appPromise } from './application';
 import { setupRoutes } from './api/routes/router';
 import { initializeDevSeed } from './data/seed-manager';
-import '../types/express';
 
 const expressApp = express();
 const PORT = process.env.PORT || 3001;
