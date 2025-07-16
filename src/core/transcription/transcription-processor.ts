@@ -43,15 +43,15 @@ export class TranscriptionProcessor {
     config: TranscriptionConfig = {}
   ) {
     this.config = {
-      maxWorkers: 4,
-      chunkDurationMs: 5 * 60 * 1000, // 5 minutos
-      maxMemoryChunks: 3,
+      maxWorkers: 4, // Ajustado para CPU-only (não sobrecarregar)
+      chunkDurationMs: 3 * 60 * 1000, // Reduzido de 5 para 3 minutos
+      maxMemoryChunks: 5, // Aumentado de 3 para 5
       enableNoiseReduction: true,
       enableSilenceRemoval: true,
       enableVolumeNormalization: true,
       enableContextDetection: true,
-      enableSpellCheck: true,
-      enableEmotionDetection: false,
+      enableSpellCheck: false, // Desabilitado por padrão para melhor performance
+      enableEmotionDetection: false, // Desabilitado por padrão para melhor performance
       ...config
     };
   }
@@ -157,7 +157,7 @@ export class TranscriptionProcessor {
     const { stdout, stderr } = await execAsync(command, {
       maxBuffer: 1024 * 1024 * 50, // 50MB buffer
       encoding: "buffer", // Usar buffer para controle manual do encoding
-      timeout: 45 * 60 * 1000, // 45 minutos timeout
+      timeout: 30 * 60 * 1000, // 30 minutos timeout (reduzido de 45 minutos)
       env,
     });
 

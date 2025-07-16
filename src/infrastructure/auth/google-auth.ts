@@ -133,7 +133,8 @@ export class GoogleAuthService {
     return this.oauth2Client.generateAuthUrl({
       access_type: 'offline',
       scope: finalScopes,
-      prompt: 'consent'  // Force to always show consent screen to get refresh token
+      prompt: 'consent',  // Force to always show consent screen to get refresh token
+      include_granted_scopes: true
     });
   }
 }

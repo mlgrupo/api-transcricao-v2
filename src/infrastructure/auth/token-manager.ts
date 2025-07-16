@@ -85,22 +85,44 @@ export class TokenManager {
       
       if (isExpired) {
         if (!tokens.refreshToken) {
-          this.logger.error(`Refresh token não encontrado para ${userEmail}`);
+          this.logger.error(`Refresh token não encontrado para ${userEmail} - usuário precisa reconectar`);
           return false;
         }
 
-        this.logger.info(`Token expirado para ${userEmail}, renovando...`);
+        this.logger.info(`Token expirado para ${userEmail}, tentando renovar...`);
         
-        const oauth2Client = this.createOAuth2Client("", tokens.refreshToken);
-        const { credentials } = await oauth2Client.refreshAccessToken();
-        
-        await this.collaboratorRepository.updateUserTokens(userEmail, {
-          access_token: credentials.access_token!,
-          refresh_token: credentials.refresh_token || tokens.refreshToken,
-          expiry_date: credentials.expiry_date ?? Date.now() + (3600 * 1000) // Default to 1 hour if null
-        });
-        
-        return true;
+        try {
+          const oauth2Client = this.createOAuth2Client("", tokens.refreshToken);
+          const { credentials } = await oauth2Client.refreshAccessToken();
+          
+          if (!credentials.access_token) {
+            this.logger.error(`Falha ao renovar token para ${userEmail} - sem access_token retornado`);
+            return false;
+          }
+          
+          await this.collaboratorRepository.updateUserTokens(userEmail, {
+            access_token: credentials.access_token,
+            refresh_token: credentials.refresh_token || tokens.refreshToken,
+            expiry_date: credentials.expiry_date ?? Date.now() + (3600 * 1000) // Default to 1 hour if null
+          });
+          
+          this.logger.info(`Token renovado com sucesso para ${userEmail}`);
+          return true;
+        } catch (refreshError: any) {
+          this.logger.error(`Erro ao renovar token para ${userEmail}:`, {
+            error: refreshError.message,
+            code: refreshError.code,
+            status: refreshError.status
+          });
+          
+          // Se o refresh token também expirou, marcar como inválido
+          if (refreshError.code === 400 || refreshError.status === 400) {
+            this.logger.error(`Refresh token inválido para ${userEmail} - usuário precisa reconectar`);
+            return false;
+          }
+          
+          return false;
+        }
       }
       
       return true;

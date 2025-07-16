@@ -111,8 +111,8 @@ class TranscriptionProcessor:
             logger.info("Rodando diarização com pyannote.audio...")
             diarization_segments: List[DiarizationSegment] = diarize_audio(temp_path)
             logger.info(f"{len(diarization_segments)} segmentos de locutores detectados.")
-            # Carregar modelo Whisper
-            model = self.load_model("large-v3")
+            # Carregar modelo Whisper (otimizado para CPU)
+            model = self.load_model("base")  # Mudado de turbo para base (melhor para CPU)
             # Transcrever cada segmento
             formatted_segments = []
             for i, seg in enumerate(diarization_segments):
@@ -121,18 +121,19 @@ class TranscriptionProcessor:
                 with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as seg_file:
                     seg_audio.export(seg_file.name, format='wav')
                     seg_path = seg_file.name
-                # Transcrever segmento
+                # Transcrever segmento com configurações otimizadas para CPU
                 result = model.transcribe(
                     seg_path,
                     language="pt",
                     task="transcribe",
                     verbose=False,
-                    fp16=False,
+                    fp16=False,  # Desabilitado para CPU-only
                     temperature=0.0,
                     compression_ratio_threshold=2.4,
                     logprob_threshold=-1.0,
                     no_speech_threshold=0.6,
-                    condition_on_previous_text=True,
+                    condition_on_previous_text=True,  # Habilitado para melhor qualidade em CPU
+                    beam_size=1,  # Reduzido para CPU (padrão é 5)
                     initial_prompt="Este é um áudio em português brasileiro."
                 )
                 os.unlink(seg_path)
