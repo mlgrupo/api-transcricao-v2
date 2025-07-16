@@ -6,7 +6,9 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "typeorm": "ts-node ./node_modules/typeorm/cli.js",
-    "migrate": "npm run build && node dist/data/data-source.js migration:run"
+    "migrate": "npm run build && node dist/data/data-source.js migration:run",
+    "frontend:build": "cd frontend && npm install && npm run build",
+    "frontend:start": "cd frontend && npm start"
   },
   "keywords": [],
   "author": "",
