@@ -1,17 +1,27 @@
 import { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 
-export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
-  const apiKey = process.env.X_API_KEY; // Chave de API configurada no .env
-  const apiKeyRequest = req.headers['x-api-key']; // Chave enviada na requisição
+// Estender a interface Request
+declare module 'express-serve-static-core' {
+  interface Request {
+    user?: any;
+  }
+}
+
+export const authMiddleware = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  const apiKey = process.env.X_API_KEY;
+  const apiKeyRequest = req.headers['x-api-key'];
 
   if (!apiKeyRequest) {
     res.status(401).json({ error: 'x-api-key header missing' });
+    return;
   }
 
   if (apiKeyRequest !== apiKey) {
     res.status(403).json({ error: 'Invalid API Key' });
+    return;
   }
+  
   next();
 };
 
@@ -30,7 +40,6 @@ export const jwtAuthMiddleware = (req: Request, res: Response, next: NextFunctio
   
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
-    // @ts-ignore
     req.user = decoded;
     next();
   } catch {
