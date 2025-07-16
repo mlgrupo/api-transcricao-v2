@@ -74,9 +74,9 @@ export class CollaboratorRepository {
         this.logger.info('[DEBUG] Resultado busca por userId:', collaborator);
       }
 
-      // Se encontrou colaborador (por email ou userId), atualiza os campos
+      // Se encontrou colaborador (por email ou userId), atualiza os campos, mas NÃO altera o userId
       if (collaborator) {
-        collaborator.userId = credentialData.user_id;
+        // NÃO altere o userId de um colaborador já existente!
         collaborator.name = credentialData.name;
         collaborator.email = credentialData.email;
         collaborator.picture = credentialData.picture;
