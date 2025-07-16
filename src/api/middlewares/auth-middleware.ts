@@ -15,21 +15,26 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   next();
 };
 
-export const jwtAuthMiddleware = (req: Request, res: Response, next: NextFunction) => {
+export const jwtAuthMiddleware = (req: Request, res: Response, next: NextFunction): void => {
   const authHeader = req.headers['authorization'];
   if (!authHeader) {
-    return res.status(401).json({ error: 'Token JWT não fornecido.' });
+    res.status(401).json({ error: 'Token JWT não fornecido.' });
+    return;
   }
+  
   const token = authHeader.split(' ')[1];
   if (!token) {
-    return res.status(401).json({ error: 'Token JWT mal formatado.' });
+    res.status(401).json({ error: 'Token JWT mal formatado.' });
+    return;
   }
+  
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
     // @ts-ignore
     req.user = decoded;
     next();
   } catch {
-    return res.status(401).json({ error: 'Token JWT inválido ou expirado.' });
+    res.status(401).json({ error: 'Token JWT inválido ou expirado.' });
+    return;
   }
 };

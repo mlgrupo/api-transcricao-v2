@@ -1,4 +1,4 @@
-import { Request, Response } from "express";
+import { Request, Response, NextFunction } from "express";
 import { Logger } from "../../utils/logger";
 import { ConfigRepository } from "../../data/repositories/config-repository";
 // Importação compatível com TypeScript e CommonJS para node-fetch
@@ -16,27 +16,25 @@ export class ConfigController {
     private logger: Logger
   ) {}
 
-  public async getRootFolder(req: Request, res: Response): Promise<void> {
+  public async getRootFolder(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const user = (req as any).user;
-      if (!user || !user.userId) {
+      if (!user?.userId) {
         res.status(401).json({ error: "Usuário não autenticado" });
         return;
       }
       const folders = await this.configRepository.getRootFolders(user.userId);
       res.status(200).json({ folders });
-      return;
     } catch (error: any) {
       this.logger.error("Erro ao buscar pastas raiz:", error);
       res.status(500).json({ error: error.message });
-      return;
     }
   }
-
-  public async setRootFolder(req: Request, res: Response): Promise<void> {
+  
+  public async setRootFolder(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const user = (req as any).user;
-      if (!user || !user.userId) {
+      if (!user?.userId) {
         res.status(401).json({ error: "Usuário não autenticado" });
         return;
       }
@@ -45,28 +43,24 @@ export class ConfigController {
         res.status(400).json({ error: "Lista de pastas é obrigatória" });
         return;
       }
-      // Validar cada pasta: aceitar link completo, id ou nome
       for (const f of folder) {
         if (!this.isValidDriveFolder(f)) {
-          let msg = `Pasta inválida: ${f}. Aceite links completos do Google Drive, IDs ou nomes.`;
-          res.status(400).json({ error: msg });
+          res.status(400).json({ error: `Pasta inválida: ${f}. Aceite links completos do Google Drive, IDs ou nomes.` });
           return;
         }
       }
       await this.configRepository.setRootFolders(folder, user.userId);
       res.status(200).json({ message: "Pastas configuradas com sucesso" });
-      return;
     } catch (error: any) {
       this.logger.error("Erro ao configurar pastas raiz:", error);
       res.status(500).json({ error: error.message });
-      return;
     }
   }
-
+  
   public async getTranscriptionConfig(req: Request, res: Response): Promise<void> {
     try {
       const user = (req as any).user;
-      if (!user || !user.userId) {
+      if (!user?.userId) {
         res.status(401).json({ error: "Usuário não autenticado" });
         return;
       }
@@ -75,14 +69,13 @@ export class ConfigController {
     } catch (error: any) {
       this.logger.error("Erro ao buscar configuração de transcrição:", error);
       res.status(500).json({ error: error.message });
-      return;
     }
   }
-
+  
   public async setTranscriptionConfig(req: Request, res: Response): Promise<void> {
     try {
       const user = (req as any).user;
-      if (!user || !user.userId) {
+      if (!user?.userId) {
         res.status(401).json({ error: "Usuário não autenticado" });
         return;
       }
@@ -97,15 +90,13 @@ export class ConfigController {
     } catch (error: any) {
       this.logger.error("Erro ao configurar transcrição:", error);
       res.status(500).json({ error: error.message });
-      return;
     }
   }
-
+  
   public async getWebhooks(req: Request, res: Response): Promise<void> {
     try {
-      // Apenas admin pode ver webhooks
       const user = (req as any).user;
-      if (!user || !user.isAdmin) {
+      if (!user?.isAdmin) {
         res.status(403).json({ error: "Acesso restrito a administradores." });
         return;
       }
@@ -114,15 +105,13 @@ export class ConfigController {
     } catch (error: any) {
       this.logger.error("Erro ao buscar webhooks:", error);
       res.status(500).json({ error: error.message });
-      return;
     }
   }
-
+  
   public async setWebhooks(req: Request, res: Response): Promise<void> {
     try {
-      // Apenas admin pode editar webhooks
       const user = (req as any).user;
-      if (!user || !user.isAdmin) {
+      if (!user?.isAdmin) {
         res.status(403).json({ error: "Acesso restrito a administradores." });
         return;
       }
@@ -131,13 +120,7 @@ export class ConfigController {
         res.status(400).json({ error: "Lista de webhooks é obrigatória" });
         return;
       }
-      // Eventos permitidos
-      const ALLOWED_EVENTS = [
-        'transcription_completed',
-        'transcription_failed',
-        'video_processing',
-      ];
-      // Validar webhooks
+      const ALLOWED_EVENTS = ['transcription_completed', 'transcription_failed', 'video_processing'];
       for (const webhook of webhooks) {
         if (!webhook.url || !webhook.name) {
           res.status(400).json({ error: "URL e nome são obrigatórios para cada webhook" });
@@ -159,18 +142,16 @@ export class ConfigController {
     } catch (error: any) {
       this.logger.error("Erro ao configurar webhooks:", error);
       res.status(500).json({ error: error.message });
-      return;
     }
   }
-
+  
   public async testWebhook(req: Request, res: Response): Promise<void> {
     try {
-      const { url, name, description, events, active } = req.body;
+      const { url } = req.body;
       if (!url) {
         res.status(400).json({ error: "URL do webhook é obrigatória" });
         return;
       }
-      // Payload de teste
       const testPayload = {
         event: "test",
         timestamp: new Date().toISOString(),
@@ -181,7 +162,6 @@ export class ConfigController {
           status: "test"
         }
       };
-      // Enviar POST real para o webhook
       let responseStatus = null;
       let responseText = null;
       try {
@@ -198,7 +178,7 @@ export class ConfigController {
         return;
       }
       this.logger.info("Teste de webhook enviado", { url, payload: testPayload, responseStatus, responseText });
-      res.status(200).json({ 
+      res.status(200).json({
         message: `Webhook testado com sucesso (status ${responseStatus})`,
         payload: testPayload,
         responseStatus,
@@ -207,9 +187,9 @@ export class ConfigController {
     } catch (error: any) {
       this.logger.error("Erro ao testar webhook:", error);
       res.status(500).json({ error: error.message });
-      return;
     }
   }
+  
 
   private isValidDriveFolder(input: string): boolean {
     const linkRegex = /^https:\/\/drive\.google\.com\/drive\/folders\/[a-zA-Z0-9_-]{10,}/;

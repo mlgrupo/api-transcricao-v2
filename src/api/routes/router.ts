@@ -1,4 +1,4 @@
-import { Express } from 'express';
+import { Express, RequestHandler } from 'express';
 import { TranscriptionController } from '../controllers/Transcription-controller';
 import { AuthController } from '../controllers/auth-controller';
 import { DrivesController } from '../controllers/drives-controller';
@@ -11,7 +11,7 @@ import { ConfigRepository } from '../../data/repositories/config-repository';
 import { GoogleAuthService } from '../../infrastructure/auth/google-auth';
 import { authMiddleware, jwtAuthMiddleware } from '../middlewares/auth-middleware'
 import { SystemController } from '../controllers/system-controller';
-import { asyncHandler } from '../utils/asyncHandler';
+import asyncHandler from '../utils/asyncHandler';
 
 export const setupRoutes = (
   app: Express,
@@ -100,8 +100,13 @@ export const setupRoutes = (
   app.delete('/api/drives/:email/disconnect', jwtAuthMiddleware, drivesController.disconnectDrive.bind(drivesController));
 
   // Rotas de configuração global
-  app.get('/api/config/root-folder', jwtAuthMiddleware, asyncHandler(configController.getRootFolder.bind(configController)));
-  app.post('/api/config/root-folder', jwtAuthMiddleware, asyncHandler(configController.setRootFolder.bind(configController)));
+  app.get('/api/config/root-folder', jwtAuthMiddleware, asyncHandler(
+    configController.getRootFolder.bind(configController)
+  ));
+  
+  app.post('/api/config/root-folder', jwtAuthMiddleware, asyncHandler(
+    configController.setRootFolder.bind(configController)
+  ));
   // @ts-ignore
   app.get('/api/config/transcription', jwtAuthMiddleware, configController.getTranscriptionConfig.bind(configController));
   // @ts-ignore
@@ -122,5 +127,7 @@ export const setupRoutes = (
   app.post('/api/videos/:videoId/reset', jwtAuthMiddleware, transcriptionController.resetQueueStatus.bind(transcriptionController));
 
   // Rota para criar usuário (apenas admin)
-  app.post('/api/users', jwtAuthMiddleware, asyncHandler(authController.createUser.bind(authController)));
+  app.post('/api/users', jwtAuthMiddleware, asyncHandler(
+    authController.createUser.bind(authController)
+  ));
 };

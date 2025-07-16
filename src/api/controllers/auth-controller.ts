@@ -1,4 +1,4 @@
-import { Request, Response } from "express";
+import { Request, Response, NextFunction } from "express";
 import { GoogleAuthService } from "../../infrastructure/auth/google-auth";
 import { CollaboratorService } from "../../domain/services/collaborator-service";
 import { Logger } from "../../utils/logger";
@@ -196,7 +196,7 @@ export class AuthController {
     }
   }
 
-  public async createUser(req: Request, res: Response): Promise<void> {
+  public async createUser(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const user = req.user as any;
       if (!user || !user.isAdmin) {
@@ -222,11 +222,9 @@ export class AuthController {
         isAdmin: !!isAdmin
       });
       res.status(201).json({ message: 'Usuário criado com sucesso.' });
-      return;
     } catch (error: any) {
       this.logger.error('Erro ao criar usuário:', error.message);
       res.status(500).json({ error: 'Erro interno ao criar usuário.' });
-      return;
     }
   }
 
