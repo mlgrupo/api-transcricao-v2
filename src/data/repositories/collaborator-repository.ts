@@ -64,17 +64,27 @@ export class CollaboratorRepository {
       let collaborator = await this.repository.findOne({
         where: { email: credentialData.email }
       });
+      this.logger.info('[DEBUG] Resultado busca por email:', collaborator);
 
-      // Se encontrou colaborador pelo email, atualiza os campos (inclusive userId)
+      // Se não encontrou pelo email, tenta pelo userId
+      if (!collaborator) {
+        collaborator = await this.repository.findOne({
+          where: { userId: credentialData.user_id }
+        });
+        this.logger.info('[DEBUG] Resultado busca por userId:', collaborator);
+      }
+
+      // Se encontrou colaborador (por email ou userId), atualiza os campos
       if (collaborator) {
         collaborator.userId = credentialData.user_id;
         collaborator.name = credentialData.name;
+        collaborator.email = credentialData.email;
         collaborator.picture = credentialData.picture;
         collaborator.folderRootName = this.FOLDER_ROOT_NAME;
         await this.repository.save(collaborator);
         this.logger.info(`Atualizado colaborador existente para ${credentialData.email}`);
       } else {
-        // Se não encontrou colaborador, cria um novo
+        // Se não encontrou colaborador nem por email nem por userId, cria um novo
         this.logger.info(`Criando novo colaborador para ${credentialData.email}`);
         collaborator = new Collaborator();
         collaborator.userId = credentialData.user_id;
