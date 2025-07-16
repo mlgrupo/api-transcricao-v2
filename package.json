@@ -6,9 +6,11 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "typeorm": "ts-node ./node_modules/typeorm/cli.js",
-    "migrate": "npm run build && node dist/data/data-source.js migration:run",
+    "migrate": "npm run build && npx typeorm migration:run -d dist/data/data-source.js",
     "frontend:build": "cd frontend && npm install && npm run build",
-    "frontend:start": "cd frontend && npm start"
+    "frontend:start": "cd frontend && npm start",
+    "start:dev": "ts-node-dev --respawn --transpile-only src/server.ts",
+    "start:dev:tsx": "tsx watch src/server.ts"
   },
   "keywords": [],
   "author": "",
