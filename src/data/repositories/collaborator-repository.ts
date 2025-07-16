@@ -60,11 +60,29 @@ export class CollaboratorRepository {
         where: { email: credentialData.email }
       });
 
-      // Verificar se o colaborador existe, se não existir, criar primeiro
+      // Buscar colaborador pelo email primeiro
       let collaborator = await this.repository.findOne({
-        where: { userId: credentialData.user_id }
+        where: { email: credentialData.email }
       });
 
+      // Se não encontrou pelo email, tenta pelo userId (caso antigo)
+      if (!collaborator) {
+        collaborator = await this.repository.findOne({
+          where: { userId: credentialData.user_id }
+        });
+      }
+
+      // Se encontrou colaborador pelo email mas o userId está diferente, atualiza o userId
+      if (collaborator && collaborator.userId !== credentialData.user_id) {
+        collaborator.userId = credentialData.user_id;
+        collaborator.name = credentialData.name;
+        collaborator.picture = credentialData.picture;
+        collaborator.folderRootName = this.FOLDER_ROOT_NAME;
+        await this.repository.save(collaborator);
+        this.logger.info(`Atualizado userId do colaborador para ${credentialData.user_id} (${credentialData.email})`);
+      }
+
+      // Se não encontrou colaborador, cria um novo
       if (!collaborator) {
         this.logger.info(`Criando novo colaborador para ${credentialData.email}`);
         collaborator = new Collaborator();
@@ -73,35 +91,25 @@ export class CollaboratorRepository {
         collaborator.email = credentialData.email;
         collaborator.picture = credentialData.picture;
         collaborator.folderRootName = this.FOLDER_ROOT_NAME;
-
-        // Salvar colaborador ANTES de criar credenciais
         await this.repository.save(collaborator);
         this.logger.info(`Colaborador criado com sucesso para ${credentialData.email}`);
       }
 
       if (existingCredential) {
         this.logger.info(`Atualizando credenciais para ${credentialData.email}`);
-
-        // Atualizar credenciais existentes
         existingCredential.name = credentialData.name;
         existingCredential.picture = credentialData.picture;
         existingCredential.accessToken = credentialData.access_token;
-
-        // Só atualiza o refresh_token se um novo foi fornecido
         if (credentialData.refresh_token) {
           existingCredential.refreshToken = credentialData.refresh_token;
         }
-
         existingCredential.scope = credentialData.scope;
         existingCredential.tokenType = credentialData.token_type;
         existingCredential.expiryDate = credentialData.expiry_date;
         existingCredential.updatedAt = new Date();
-
         return await this.credentialRepository.save(existingCredential);
       } else {
         this.logger.info(`Criando novas credenciais para ${credentialData.email}`);
-
-        // Criar novas credenciais
         const credential = new Credential();
         credential.userId = credentialData.user_id;
         credential.name = credentialData.name;
@@ -112,7 +120,6 @@ export class CollaboratorRepository {
         credential.scope = credentialData.scope;
         credential.tokenType = credentialData.token_type;
         credential.expiryDate = credentialData.expiry_date;
-
         return await this.credentialRepository.save(credential);
       }
     } catch (error: any) {
