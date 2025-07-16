@@ -29,8 +29,8 @@ if (databaseUrl) {
       ApplicationLog,
       SystemConfig,
     ],
-    migrations: ["src/migrations/**/*.ts"],
-    subscribers: ["src/subscribers/**/*.ts"],
+    migrations: [process.env.NODE_ENV === "production" ? "dist/migrations/**/*.js" : "src/migrations/**/*.ts"],
+    subscribers: [process.env.NODE_ENV === "production" ? "dist/subscribers/**/*.js" : "src/subscribers/**/*.ts"],
     extra: { charset: "utf8" }
   };
 } else {
