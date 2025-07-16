@@ -1,6 +1,7 @@
 import { Logger } from "../../utils/logger";
 import { CollaboratorRepository } from "../../data/repositories/collaborator-repository";
 import { Credential } from "../../domain/models/Credentials";
+import bcrypt from 'bcryptjs';
 
 export interface TokenData {
   access_token: string;
@@ -176,7 +177,12 @@ export class CollaboratorService {
    */
   public async createCollaborator(data: { name: string; email: string; password: string; isAdmin?: boolean }): Promise<void> {
     try {
-      await this.collaboratorRepository.createCollaborator(data);
+      // Gera hash da senha antes de salvar
+      const hashedPassword = await bcrypt.hash(data.password, 10);
+      await this.collaboratorRepository.createCollaborator({
+        ...data,
+        password: hashedPassword
+      });
       this.logger.info(`Colaborador criado manualmente: ${data.email}`);
     } catch (error: any) {
       this.logger.error('Erro ao criar colaborador manualmente:', error);
