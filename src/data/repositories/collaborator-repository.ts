@@ -75,6 +75,7 @@ export class CollaboratorRepository {
       }
 
       // Se encontrou colaborador (por email ou userId), atualiza os campos, mas NÃO altera o userId
+      let userIdParaCredencial: string;
       if (collaborator) {
         // NÃO altere o userId de um colaborador já existente!
         collaborator.name = credentialData.name;
@@ -83,6 +84,7 @@ export class CollaboratorRepository {
         collaborator.folderRootName = this.FOLDER_ROOT_NAME;
         await this.repository.save(collaborator);
         this.logger.info(`Atualizado colaborador existente para ${credentialData.email}`);
+        userIdParaCredencial = collaborator.userId;
       } else {
         // Se não encontrou colaborador nem por email nem por userId, cria um novo
         this.logger.info(`Criando novo colaborador para ${credentialData.email}`);
@@ -94,10 +96,12 @@ export class CollaboratorRepository {
         collaborator.folderRootName = this.FOLDER_ROOT_NAME;
         await this.repository.save(collaborator);
         this.logger.info(`Colaborador criado com sucesso para ${credentialData.email}`);
+        userIdParaCredencial = credentialData.user_id;
       }
 
       if (existingCredential) {
         this.logger.info(`Atualizando credenciais para ${credentialData.email}`);
+        existingCredential.userId = userIdParaCredencial;
         existingCredential.name = credentialData.name;
         existingCredential.picture = credentialData.picture;
         existingCredential.accessToken = credentialData.access_token;
@@ -112,7 +116,7 @@ export class CollaboratorRepository {
       } else {
         this.logger.info(`Criando novas credenciais para ${credentialData.email}`);
         const credential = new Credential();
-        credential.userId = credentialData.user_id;
+        credential.userId = userIdParaCredencial;
         credential.name = credentialData.name;
         credential.email = credentialData.email;
         credential.picture = credentialData.picture;
