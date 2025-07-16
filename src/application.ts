@@ -25,7 +25,6 @@ import { DriveService } from './core/drive/drive-service';
 import { JobScheduler } from './infrastructure/scheduler/job-scheduler';
 import { AudioProcessor } from './core/transcription/audio-processor';
 import { TranscriptionProcessor } from './core/transcription/transcription-processor';
-import '../types/express';
 
 /**
  * Classe responsável pela inicialização e gerenciamento dos componentes da aplicação
