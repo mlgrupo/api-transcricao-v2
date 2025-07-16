@@ -20,8 +20,7 @@ ENV PIP_NO_CACHE_DIR=1
 COPY . .
 
 # Build do projeto Node.js
-RUN npm run build
-
+RUN cd frontend && npm run build
 # Instala dependências Python
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r python/requirements.txt
