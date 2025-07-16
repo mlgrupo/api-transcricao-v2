@@ -20,7 +20,7 @@ ENV PIP_NO_CACHE_DIR=1
 COPY . .
 
 # Build do projeto Node.js
-RUN npm run dist
+RUN npm run build
 
 # Instala dependências Python
 RUN pip install --upgrade pip && \
@@ -33,4 +33,4 @@ RUN mkdir -p /app/temp && chmod 777 /app/temp
 EXPOSE 8080
 
 # Starta o servidor (usa a porta definida pelo Railway)
-CMD ["node", "dist/server.js"]
+CMD ["sh", "-c", "npm run migrate && npm start"]
