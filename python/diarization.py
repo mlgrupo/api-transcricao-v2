@@ -8,8 +8,8 @@ import sys
 from typing import List
 import logging
 
-# Token fixo
-HF_TOKEN = "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"
+# Token HuggingFace: priorizar variável de ambiente
+HF_TOKEN = os.environ.get("HF_TOKEN")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -25,8 +25,8 @@ class DiarizationSegment:
 
 def diarize_audio(audio_path: str) -> List[DiarizationSegment]:
     hf_token = HF_TOKEN
-    logger.info(f"Token HuggingFace: {'***' if hf_token else '[NÃO ENCONTRADO]'} (fixo no código)")
-    if not hf_token:
+    logger.info(f"Token HuggingFace: {'***' if hf_token else '[NÃO ENCONTRADO]'} (env/arquivo)")
+    if not hf_token or hf_token.strip() == "":
         logger.error("Token HuggingFace não encontrado. Defina a variável de ambiente HF_TOKEN.")
         raise RuntimeError("Token HuggingFace não encontrado. Defina a variável de ambiente HF_TOKEN.")
     try:
