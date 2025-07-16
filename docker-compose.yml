@@ -9,6 +9,6 @@ services:
     env_file:
       - .env
     ports:
-      - "8080:8080" # Altere para a porta que seu backend expõe
+      - "9898:9898" # Altere para a porta que seu backend expõe
     restart: always
     depends_on: []
