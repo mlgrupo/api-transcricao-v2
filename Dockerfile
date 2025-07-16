@@ -33,4 +33,4 @@ RUN mkdir -p /app/temp && chmod 777 /app/temp
 EXPOSE 8080
 
 # Starta o servidor (usa a porta definida pelo Railway)
-CMD ["sh", "-c", "npm run migrate && npm start"]
+CMD ["sh", "-c", "npm start"]
