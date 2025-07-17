@@ -185,8 +185,7 @@ class TranscriptionProcessor:
     def __init__(self):
         self.audio_preprocessor = AudioPreprocessor()
         self.text_processor = TextPostProcessor()
-        self.model = None
-        self.speed_factor = 1.5  # Áudio mais acelerado
+        self.model = None # Áudio mais acelerado
         self.max_workers = 8     # Usar todos os vCPUs
         self.model_size = "turbo" # Forçar modelo turbo
 
