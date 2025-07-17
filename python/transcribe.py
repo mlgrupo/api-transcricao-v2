@@ -185,48 +185,73 @@ class TranscriptionProcessor:
     def __init__(self):
         self.audio_preprocessor = AudioPreprocessor()
         self.text_processor = TextPostProcessor()
-        self.speed_factor = 2.0      # MAIS aceleração
-        self.max_workers = 6         # Reduzir para evitar sobrecarga
-        self.model_size = "tiny"     # FORÇAR modelo mais rápido
+        self.model = None
+        self.speed_factor = 1.5  # Áudio mais acelerado
+        self.max_workers = 8     # Usar todos os vCPUs
+        self.model_size = "turbo" # Forçar modelo turbo
+
+    def load_model(self, model_size: str = None) -> whisper.Whisper:
+        if self.model is None:
+            model_size = model_size or self.model_size
+            logger.info(f"Carregando modelo Whisper: {model_size}")
+            self.model = whisper.load_model(model_size, device="cpu")
+            logger.info(f"Modelo {model_size} carregado com sucesso")
+        return self.model
+
+    def transcribe_segment(self, seg: DiarizationSegment, audio: AudioSegment, model: whisper.Whisper) -> str:
+        try:
+            seg_audio = audio[ int(seg.start*1000) : int(seg.end*1000) ]
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as seg_file:
+                seg_audio.export(seg_file.name, format='wav')
+                seg_path = seg_file.name
+            result = model.transcribe(
+                seg_path,
+                language="pt",
+                task="transcribe",
+                verbose=False,
+                fp16=False,
+                temperature=0.0,
+                compression_ratio_threshold=2.4,
+                logprob_threshold=-1.0,
+                no_speech_threshold=0.6,
+                condition_on_previous_text=False,
+                beam_size=1,
+                initial_prompt=None,
+                num_workers=1,
+                best_of=1
+            )
+            os.unlink(seg_path)
+            processed_text = result["text"].strip()
+            original_start = seg.start / self.speed_factor
+            original_end = seg.end / self.speed_factor
+            timestamp = self.text_processor.format_timestamp(original_start, original_end)
+            return f"{timestamp}\n{seg.speaker}: {processed_text}"
+        except Exception as e:
+            logger.error(f"Erro ao transcrever segmento: {e}")
+            return f"[ERRO] Segmento {seg.speaker}: {str(e)}"
 
     def transcribe_audio(self, audio_path: str, output_dir: Optional[str] = None) -> str:
-        logger.info(f"Transcrição ULTRA-RÁPIDA: {audio_path}")
-        logger.info(f"Modelo forçado: {self.model_size}")
-        
+        logger.info(f"Iniciando transcrição avançada com diarização: {audio_path}")
         try:
-            # Pré-carregar modelo
-            get_whisper_model(self.model_size)
-            
-            # Processar áudio
             audio = AudioSegment.from_file(audio_path)
             audio = self.audio_preprocessor.process(audio, speed_up=True)
-            
+            # Acelerar ainda mais
+            audio = self.audio_preprocessor.speed_up_audio(audio, self.speed_factor)
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
                 audio.export(temp_file.name, format='wav')
                 temp_path = temp_file.name
-            
-            # Diarização
+            # Diarização rápida
             diarization_segments: List[DiarizationSegment] = diarize_audio(temp_path)
-            logger.info(f"{len(diarization_segments)} segmentos detectados")
-            
-            # Preparar dados para processamento paralelo
-            segment_data = [
-                (seg, temp_path, self.speed_factor, self.model_size)
-                for seg in diarization_segments
-            ]
-            
-            # Processamento paralelo REAL com processos
+            logger.info(f"{len(diarization_segments)} segmentos de locutores detectados.")
+            model = self.load_model("turbo")
+            logger.info(f"Iniciando transcrição paralela de {len(diarization_segments)} segmentos...")
             formatted_segments = []
             max_workers = min(self.max_workers, len(diarization_segments)) or 1
-            
-            logger.info(f"Processamento paralelo com {max_workers} processos...")
-            
             with ProcessPoolExecutor(max_workers=max_workers) as executor:
                 future_to_segment = {
                     executor.submit(transcribe_single_segment, data): data[0]
                     for data in segment_data
                 }
-                
                 for future in as_completed(future_to_segment):
                     segment = future_to_segment[future]
                     try:
@@ -235,10 +260,8 @@ class TranscriptionProcessor:
                     except Exception as e:
                         logger.error(f"Erro no segmento {segment.speaker}: {e}")
                         formatted_segments.append(f"[ERRO] {segment.speaker}: {str(e)}")
-            
             os.unlink(temp_path)
             return "\n\n".join(formatted_segments)
-            
         except Exception as e:
             logger.error(f"Erro na transcrição: {e}")
             raise
