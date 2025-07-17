@@ -13,6 +13,7 @@ from typing import Dict, Optional, List
 from datetime import datetime
 import re
 from diarization import diarize_audio, DiarizationSegment
+import traceback
 
 # Processamento de áudio
 from pydub import AudioSegment
@@ -109,70 +110,112 @@ class TranscriptionProcessor:
             logger.info("Modelo carregado com sucesso")
         return self.model
     def transcribe_audio(self, audio_path: str, output_dir: Optional[str] = None) -> str:
-        logger.info(f"Iniciando transcrição avançada com diarização: {audio_path}")
+        logger.info(f"[INÍCIO] Transcrição avançada com diarização: {audio_path}")
         try:
-            # NOVO: Dividir áudio em partes menores se for muito longo
+            logger.info("[ETAPA] Carregando áudio original...")
             audio = AudioSegment.from_file(audio_path)
-            chunk_length_ms = 30*60*1000  # 30 minutos
+            logger.info(f"[OK] Áudio carregado: {len(audio)/1000:.1f}s")
+            chunk_length_ms = 10*60*1000  # 10 minutos
             if len(audio) > chunk_length_ms:
-                logger.info(f"Áudio longo detectado ({len(audio)/60000:.1f} min). Dividindo em partes de 30 minutos...")
+                logger.info(f"[ETAPA] Áudio longo detectado ({len(audio)/60000:.1f} min). Dividindo em partes de 10 minutos...")
                 chunk_paths = split_audio(audio_path, chunk_length_ms)
+                logger.info(f"[OK] Divisão concluída: {len(chunk_paths)} partes.")
             else:
                 chunk_paths = [audio_path]
+                logger.info("[OK] Áudio curto, sem divisão.")
             all_formatted_segments = []
+            model = self.load_model("medium")  # Sempre usar 'medium'
             for idx, chunk_path in enumerate(chunk_paths):
-                logger.info(f"Processando chunk {idx+1}/{len(chunk_paths)}: {chunk_path}")
-                # Carregar áudio e pré-processar
-                chunk_audio = AudioSegment.from_file(chunk_path)
-                chunk_audio = self.audio_preprocessor.process(chunk_audio)
-                # Salvar áudio processado temporariamente
-                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-                    chunk_audio.export(temp_file.name, format='wav')
-                    temp_path = temp_file.name
-                # Diarização real
-                logger.info("Rodando diarização com pyannote.audio...")
-                diarization_segments: List[DiarizationSegment] = diarize_audio(temp_path)
-                logger.info(f"{len(diarization_segments)} segmentos de locutores detectados.")
-                # Carregar modelo Whisper
-                model = self.load_model("medium")
-                # Transcrever cada segmento
-                formatted_segments = []
-                for i, seg in enumerate(diarization_segments):
-                    # Extrair segmento do áudio
-                    seg_audio = chunk_audio[ int(seg.start*1000) : int(seg.end*1000) ]
-                    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as seg_file:
-                        seg_audio.export(seg_file.name, format='wav')
-                        seg_path = seg_file.name
-                    # Transcrever segmento
-                    result = model.transcribe(
-                        seg_path,
-                        language="pt",
-                        task="transcribe",
-                        verbose=False,
-                        fp16=False,
-                        temperature=0.0,
-                        compression_ratio_threshold=2.4,
-                        logprob_threshold=-1.0,
-                        no_speech_threshold=0.6,
-                        condition_on_previous_text=True,
-                        initial_prompt="Este é um áudio em português brasileiro."
-                    )
-                    os.unlink(seg_path)
-                    processed_text = self.text_processor.clean_text(result["text"])
-                    timestamp = self.text_processor.format_timestamp(seg.start + idx*chunk_length_ms/1000, seg.end + idx*chunk_length_ms/1000)
-                    formatted_segments.append(f"{timestamp}\n{seg.speaker}: {processed_text}")
-                os.unlink(temp_path)
-                # Remover chunk temporário se foi criado
-                if chunk_path != audio_path:
+                logger.info(f"[ETAPA] Processando chunk {idx+1}/{len(chunk_paths)}: {chunk_path}")
+                try:
+                    logger.info("[ETAPA] Carregando chunk de áudio...")
+                    chunk_audio = AudioSegment.from_file(chunk_path)
+                    logger.info("[OK] Chunk carregado.")
+                    logger.info("[ETAPA] Pré-processando chunk...")
+                    chunk_audio = self.audio_preprocessor.process(chunk_audio)
+                    logger.info("[OK] Pré-processamento concluído.")
+                    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                        chunk_audio.export(temp_file.name, format='wav')
+                        temp_path = temp_file.name
                     try:
-                        os.remove(chunk_path)
-                    except Exception:
-                        pass
-                all_formatted_segments.extend(formatted_segments)
+                        logger.info(f"[ETAPA] Rodando diarização com pyannote.audio no chunk {idx+1}...")
+                        diarization_segments: List[DiarizationSegment] = diarize_audio(temp_path)
+                        logger.info(f"[OK] {len(diarization_segments)} segmentos de locutores detectados.")
+                        formatted_segments = []
+                        for i, seg in enumerate(diarization_segments):
+                            logger.info(f"[ETAPA] Transcrevendo segmento {i+1}/{len(diarization_segments)} do chunk {idx+1}...")
+                            seg_audio = chunk_audio[ int(seg.start*1000) : int(seg.end*1000) ]
+                            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as seg_file:
+                                seg_audio.export(seg_file.name, format='wav')
+                                seg_path = seg_file.name
+                            try:
+                                result = model.transcribe(
+                                    seg_path,
+                                    language="pt",
+                                    task="transcribe",
+                                    verbose=False,
+                                    fp16=False,
+                                    temperature=0.0,
+                                    compression_ratio_threshold=2.4,
+                                    logprob_threshold=-1.0,
+                                    no_speech_threshold=0.6,
+                                    condition_on_previous_text=True,
+                                    initial_prompt="Este é um áudio em português brasileiro."
+                                )
+                                logger.info(f"[OK] Segmento {i+1} transcrito.")
+                            except Exception as e:
+                                logger.error(f"[ERRO] Falha ao transcrever segmento {i+1}: {e}\n{traceback.format_exc()}")
+                                formatted_segments.append(f"[ERRO] Falha ao transcrever segmento {i+1} do chunk {idx+1}: {e}")
+                                continue
+                            finally:
+                                os.unlink(seg_path)
+                            processed_text = self.text_processor.clean_text(result["text"])
+                            timestamp = self.text_processor.format_timestamp(seg.start + idx*chunk_length_ms/1000, seg.end + idx*chunk_length_ms/1000)
+                            formatted_segments.append(f"{timestamp}\n{seg.speaker}: {processed_text}")
+                        all_formatted_segments.extend(formatted_segments)
+                        logger.info(f"[OK] Chunk {idx+1} processado com sucesso (diarização).")
+                    except Exception as diarization_error:
+                        logger.error(f"[ERRO] Falha na diarização do chunk {idx+1}: {diarization_error}\n{traceback.format_exc()}")
+                        # Fallback: transcrever o chunk inteiro sem diarização
+                        try:
+                            logger.info(f"[FALLBACK] Transcrevendo chunk {idx+1} inteiro sem diarização...")
+                            result = model.transcribe(
+                                temp_path,
+                                language="pt",
+                                task="transcribe",
+                                verbose=False,
+                                fp16=False,
+                                temperature=0.0,
+                                compression_ratio_threshold=2.4,
+                                logprob_threshold=-1.0,
+                                no_speech_threshold=0.6,
+                                condition_on_previous_text=True,
+                                initial_prompt="Este é um áudio em português brasileiro."
+                            )
+                            processed_text = self.text_processor.clean_text(result["text"])
+                            timestamp = self.text_processor.format_timestamp(0 + idx*chunk_length_ms/1000, len(chunk_audio)/1000 + idx*chunk_length_ms/1000)
+                            all_formatted_segments.append(f"{timestamp}\n[Sem diarização]: {processed_text}")
+                            logger.info(f"[OK] Chunk {idx+1} processado com sucesso (fallback sem diarização).")
+                        except Exception as fallback_error:
+                            logger.error(f"[ERRO] Falha total ao transcrever chunk {idx+1}: {fallback_error}\n{traceback.format_exc()}")
+                            all_formatted_segments.append(f"[ERRO] Falha total ao transcrever chunk {idx+1}: {fallback_error}")
+                    finally:
+                        os.unlink(temp_path)
+                    if chunk_path != audio_path:
+                        try:
+                            os.remove(chunk_path)
+                            logger.info(f"[OK] Chunk temporário removido: {chunk_path}")
+                        except Exception as e:
+                            logger.warning(f"[WARN] Falha ao remover chunk temporário: {e}")
+                except Exception as e:
+                    logger.error(f"[ERRO] Falha inesperada ao processar chunk {idx+1}: {e}\n{traceback.format_exc()}")
+                    all_formatted_segments.append(f"[ERRO] Falha inesperada ao processar chunk {idx+1}: {e}")
+                    continue
+            logger.info("[FIM] Transcrição concluída com sucesso.")
             return "\n\n".join(all_formatted_segments)
         except Exception as e:
-            logger.error(f"Erro na transcrição: {e}")
-            raise
+            logger.error(f"[ERRO FATAL] Erro na transcrição: {e}\n{traceback.format_exc()}")
+            return f"[ERRO FATAL] Erro na transcrição: {e}"  # Nunca lança, sempre retorna string explicando o erro
 
 def main():
     if len(sys.argv) < 2:
