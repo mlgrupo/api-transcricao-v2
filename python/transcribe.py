@@ -19,6 +19,17 @@ from pydub import AudioSegment
 from pydub.effects import normalize
 import numpy as np
 
+# NOVO: Função para dividir áudio longo em partes menores
+def split_audio(input_path, chunk_length_ms=30*60*1000):  # 30 minutos
+    audio = AudioSegment.from_file(input_path)
+    chunks = []
+    for i in range(0, len(audio), chunk_length_ms):
+        chunk = audio[i:i+chunk_length_ms]
+        chunk_path = f"{input_path}_chunk_{i//chunk_length_ms}.wav"
+        chunk.export(chunk_path, format="wav")
+        chunks.append(chunk_path)
+    return chunks
+
 # Processamento de texto
 from text_processor import TextProcessor, TextProcessingRules
 
@@ -100,47 +111,65 @@ class TranscriptionProcessor:
     def transcribe_audio(self, audio_path: str, output_dir: Optional[str] = None) -> str:
         logger.info(f"Iniciando transcrição avançada com diarização: {audio_path}")
         try:
-            # Carregar áudio e pré-processar
+            # NOVO: Dividir áudio em partes menores se for muito longo
             audio = AudioSegment.from_file(audio_path)
-            audio = self.audio_preprocessor.process(audio)
-            # Salvar áudio processado temporariamente
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-                audio.export(temp_file.name, format='wav')
-                temp_path = temp_file.name
-            # Diarização real
-            logger.info("Rodando diarização com pyannote.audio...")
-            diarization_segments: List[DiarizationSegment] = diarize_audio(temp_path)
-            logger.info(f"{len(diarization_segments)} segmentos de locutores detectados.")
-            # Carregar modelo Whisper
-            model = self.load_model("medium")
-            # Transcrever cada segmento
-            formatted_segments = []
-            for i, seg in enumerate(diarization_segments):
-                # Extrair segmento do áudio
-                seg_audio = audio[ int(seg.start*1000) : int(seg.end*1000) ]
-                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as seg_file:
-                    seg_audio.export(seg_file.name, format='wav')
-                    seg_path = seg_file.name
-                # Transcrever segmento
-                result = model.transcribe(
-                    seg_path,
-                    language="pt",
-                    task="transcribe",
-                    verbose=False,
-                    fp16=False,
-                    temperature=0.0,
-                    compression_ratio_threshold=2.4,
-                    logprob_threshold=-1.0,
-                    no_speech_threshold=0.6,
-                    condition_on_previous_text=True,
-                    initial_prompt="Este é um áudio em português brasileiro."
-                )
-                os.unlink(seg_path)
-                processed_text = self.text_processor.clean_text(result["text"])
-                timestamp = self.text_processor.format_timestamp(seg.start, seg.end)
-                formatted_segments.append(f"{timestamp}\n{seg.speaker}: {processed_text}")
-            os.unlink(temp_path)
-            return "\n\n".join(formatted_segments)
+            chunk_length_ms = 30*60*1000  # 30 minutos
+            if len(audio) > chunk_length_ms:
+                logger.info(f"Áudio longo detectado ({len(audio)/60000:.1f} min). Dividindo em partes de 30 minutos...")
+                chunk_paths = split_audio(audio_path, chunk_length_ms)
+            else:
+                chunk_paths = [audio_path]
+            all_formatted_segments = []
+            for idx, chunk_path in enumerate(chunk_paths):
+                logger.info(f"Processando chunk {idx+1}/{len(chunk_paths)}: {chunk_path}")
+                # Carregar áudio e pré-processar
+                chunk_audio = AudioSegment.from_file(chunk_path)
+                chunk_audio = self.audio_preprocessor.process(chunk_audio)
+                # Salvar áudio processado temporariamente
+                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                    chunk_audio.export(temp_file.name, format='wav')
+                    temp_path = temp_file.name
+                # Diarização real
+                logger.info("Rodando diarização com pyannote.audio...")
+                diarization_segments: List[DiarizationSegment] = diarize_audio(temp_path)
+                logger.info(f"{len(diarization_segments)} segmentos de locutores detectados.")
+                # Carregar modelo Whisper
+                model = self.load_model("medium")
+                # Transcrever cada segmento
+                formatted_segments = []
+                for i, seg in enumerate(diarization_segments):
+                    # Extrair segmento do áudio
+                    seg_audio = chunk_audio[ int(seg.start*1000) : int(seg.end*1000) ]
+                    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as seg_file:
+                        seg_audio.export(seg_file.name, format='wav')
+                        seg_path = seg_file.name
+                    # Transcrever segmento
+                    result = model.transcribe(
+                        seg_path,
+                        language="pt",
+                        task="transcribe",
+                        verbose=False,
+                        fp16=False,
+                        temperature=0.0,
+                        compression_ratio_threshold=2.4,
+                        logprob_threshold=-1.0,
+                        no_speech_threshold=0.6,
+                        condition_on_previous_text=True,
+                        initial_prompt="Este é um áudio em português brasileiro."
+                    )
+                    os.unlink(seg_path)
+                    processed_text = self.text_processor.clean_text(result["text"])
+                    timestamp = self.text_processor.format_timestamp(seg.start + idx*chunk_length_ms/1000, seg.end + idx*chunk_length_ms/1000)
+                    formatted_segments.append(f"{timestamp}\n{seg.speaker}: {processed_text}")
+                os.unlink(temp_path)
+                # Remover chunk temporário se foi criado
+                if chunk_path != audio_path:
+                    try:
+                        os.remove(chunk_path)
+                    except Exception:
+                        pass
+                all_formatted_segments.extend(formatted_segments)
+            return "\n\n".join(all_formatted_segments)
         except Exception as e:
             logger.error(f"Erro na transcrição: {e}")
             raise
