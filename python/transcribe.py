@@ -53,7 +53,7 @@ logger.info(f'[BOOT] Diretório de trabalho atual: {os.getcwd()}', extra={}, sta
 logger.info(f'[BOOT] Versão do Python: {sys.version}', extra={}, stacklevel=1)
 
 # NOVO: Script auxiliar para transcrever um chunk isoladamente
-CHUNK_WORKER_SCRIPT = "chunk_worker.py"
+CHUNK_WORKER_SCRIPT = os.path.join(os.path.dirname(__file__), "chunk_worker.py")
 
 class AudioPreprocessor:
     def __init__(self):
