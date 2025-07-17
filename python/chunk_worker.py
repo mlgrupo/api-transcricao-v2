@@ -16,6 +16,16 @@ logging.basicConfig(
     force=True
 )
 logger = logging.getLogger(__name__)
+# FileHandler para log em arquivo
+try:
+    log_path = os.path.join(os.path.dirname(__file__), "chunk_worker.log")
+    file_handler = logging.FileHandler(log_path, encoding='utf-8')
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    file_handler.flush = lambda: None  # Garantir compatibilidade
+    logging.getLogger().addHandler(file_handler)
+    logger.info(f'[BOOT] FileHandler de log inicializado em {log_path}', extra={}, stacklevel=1)
+except Exception as e:
+    print(f'[ERRO] Falha ao inicializar FileHandler de log: {e}', flush=True)
 logger.info('==== [BOOT] Script chunk_worker.py iniciado ===', extra={}, stacklevel=1)
 logger.info(f'[BOOT] Diretório de trabalho atual: {os.getcwd()}', extra={}, stacklevel=1)
 logger.info(f'[BOOT] Versão do Python: {sys.version}', extra={}, stacklevel=1)
