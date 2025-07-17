@@ -44,9 +44,13 @@ from text_processor import TextProcessor, TextProcessingRules
 # Configuração de logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    force=True
 )
 logger = logging.getLogger(__name__)
+logger.info('==== [BOOT] Script transcribe.py iniciado ===', extra={}, stacklevel=1)
+logger.info(f'[BOOT] Diretório de trabalho atual: {os.getcwd()}', extra={}, stacklevel=1)
+logger.info(f'[BOOT] Versão do Python: {sys.version}', extra={}, stacklevel=1)
 
 # NOVO: Script auxiliar para transcrever um chunk isoladamente
 CHUNK_WORKER_SCRIPT = "chunk_worker.py"
@@ -72,12 +76,12 @@ class AudioPreprocessor:
             logger.warning(f"Erro na conversão de formato: {e}")
             return audio
     def process(self, audio: AudioSegment) -> AudioSegment:
-        logger.info("Iniciando pré-processamento de áudio...")
+        logger.info("Iniciando pré-processamento de áudio...", extra={}, stacklevel=1)
         original_duration = len(audio)
         audio = self.normalize_audio(audio)
         audio = self.convert_format(audio)
         final_duration = len(audio)
-        logger.info(f"Pré-processamento concluído: {original_duration}ms -> {final_duration}ms")
+        logger.info(f"Pré-processamento concluído: {original_duration}ms -> {final_duration}ms", extra={}, stacklevel=1)
         return audio
 
 class TextPostProcessor:
@@ -115,50 +119,51 @@ class TranscriptionProcessor:
         self.model = None
     def load_model(self, model_size: str = "medium") -> whisper.Whisper:
         if self.model is None:
-            logger.info(f"carregando Whisper: {model_size}")
+            logger.info(f"carregando Whisper: {model_size}", extra={}, stacklevel=1)
             self.model = whisper.load_model(model_size)
-            logger.info("Modelo carregado com sucesso")
+            logger.info("Modelo carregado com sucesso", extra={}, stacklevel=1)
         return self.model
     def transcribe_audio(self, audio_path: str, output_dir: Optional[str] = None) -> str:
-        logger.info(f"[INÍCIO] Transcrição avançada com diarização: {audio_path}")
+        logger.info(f"[INÍCIO] Transcrição avançada com diarização: {audio_path}", extra={}, stacklevel=1)
         all_formatted_segments = []
         try:
-            logger.info("[ETAPA] Carregando áudio original...")
+            logger.info("[ETAPA] Carregando áudio original...", extra={}, stacklevel=1)
             audio = AudioSegment.from_file(audio_path)
-            logger.info(f"[OK] Áudio carregado: {len(audio)/1000:.1f}s")
+            logger.info(f"[OK] Áudio carregado: {len(audio)/1000:.1f}s", extra={}, stacklevel=1)
             chunk_length_ms = 10*60*1000  # 10 minutos
             if len(audio) > chunk_length_ms:
-                logger.info(f"[ETAPA] Áudio longo detectado ({len(audio)/60000:.1f} min). Dividindo em partes de 10 minutos...")
+                logger.info(f"[ETAPA] Áudio longo detectado ({len(audio)/60000:.1f} min). Dividindo em partes de 10 minutos...", extra={}, stacklevel=1)
                 chunk_paths = split_audio(audio_path, chunk_length_ms)
-                logger.info(f"[OK] Divisão concluída: {len(chunk_paths)} partes.")
+                logger.info(f"[OK] Divisão concluída: {len(chunk_paths)} partes.", extra={}, stacklevel=1)
             else:
                 chunk_paths = [audio_path]
-                logger.info("[OK] Áudio curto, sem divisão.")
+                logger.info("[OK] Áudio curto, sem divisão.", extra={}, stacklevel=1)
             chunk_results_dir = output_dir or os.path.dirname(audio_path)
             os.makedirs(chunk_results_dir, exist_ok=True)
             chunk_txt_files = []
             max_workers = 4  # Metade dos vCPUs para robustez
             def process_chunk(idx, chunk_path):
+                logger.info(f'[BOOT] Iniciando processamento do chunk {idx+1}', extra={}, stacklevel=1)
                 chunk_txt_path = os.path.join(chunk_results_dir, f"chunk_{idx+1}.txt")
                 chunk_err_path = os.path.join(chunk_results_dir, f"chunk_{idx+1}.err")
                 if os.path.exists(chunk_txt_path):
-                    logger.info(f"[SKIP] Chunk {idx+1} já processado. Pulando...")
+                    logger.info(f"[SKIP] Chunk {idx+1} já processado. Pulando...", extra={}, stacklevel=1)
                     return chunk_txt_path
-                logger.info(f"[ETAPA] Processando chunk {idx+1}/{len(chunk_paths)} em subprocesso: {chunk_path}")
+                logger.info(f"[ETAPA] Processando chunk {idx+1}/{len(chunk_paths)} em subprocesso: {chunk_path}", extra={}, stacklevel=1)
                 try:
                     result = subprocess.run([
                         sys.executable, CHUNK_WORKER_SCRIPT, chunk_path, chunk_txt_path, chunk_err_path
                     ], capture_output=True, text=True, timeout=None)
                     if result.returncode == 0 and os.path.exists(chunk_txt_path):
-                        logger.info(f"[OK] Chunk {idx+1} processado e salvo em {chunk_txt_path}")
+                        logger.info(f"[OK] Chunk {idx+1} processado e salvo em {chunk_txt_path}", extra={}, stacklevel=1)
                         return chunk_txt_path
                     else:
-                        logger.error(f"[ERRO] Subprocesso do chunk {idx+1} falhou. Veja {chunk_err_path}. STDERR: {result.stderr}")
+                        logger.error(f"[ERRO] Subprocesso do chunk {idx+1} falhou. Veja {chunk_err_path}. STDERR: {result.stderr}", extra={}, stacklevel=1)
                         with open(chunk_err_path, 'a', encoding='utf-8') as errf:
                             errf.write(f"\n[STDERR]\n{result.stderr}")
                         return None
                 except Exception as e:
-                    logger.error(f"[ERRO] Falha inesperada ao processar chunk {idx+1} em subprocesso: {e}\n{traceback.format_exc()}")
+                    logger.error(f"[ERRO] Falha inesperada ao processar chunk {idx+1} em subprocesso: {e}\n{traceback.format_exc()}", extra={}, stacklevel=1)
                     with open(chunk_err_path, 'w', encoding='utf-8') as errf:
                         errf.write(f"[ERRO] Falha inesperada ao processar chunk {idx+1} em subprocesso: {e}\n{traceback.format_exc()}")
                     return None
@@ -167,9 +172,10 @@ class TranscriptionProcessor:
                     try:
                         if chunk_path != audio_path and os.path.exists(chunk_path):
                             os.remove(chunk_path)
-                            logger.info(f"[OK] Chunk temporário removido: {chunk_path}")
+                            logger.info(f"[OK] Chunk temporário removido: {chunk_path}", extra={}, stacklevel=1)
                     except Exception as e:
-                        logger.warning(f"[WARN] Falha ao remover chunk temporário: {e}")
+                        logger.warning(f"[WARN] Falha ao remover chunk temporário: {e}", extra={}, stacklevel=1)
+                logger.info(f'[BOOT] Fim do processamento do chunk {idx+1}', extra={}, stacklevel=1)
             # Paralelismo controlado
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_idx = {executor.submit(process_chunk, idx, chunk_path): idx for idx, chunk_path in enumerate(chunk_paths)}
@@ -180,7 +186,7 @@ class TranscriptionProcessor:
                         if txt_path:
                             chunk_txt_files.append(txt_path)
                     except Exception as e:
-                        logger.error(f"[ERRO] Falha inesperada no futuro do chunk {idx+1}: {e}\n{traceback.format_exc()}")
+                        logger.error(f"[ERRO] Falha inesperada no futuro do chunk {idx+1}: {e}\n{traceback.format_exc()}", extra={}, stacklevel=1)
             # Unir todos os resultados dos chunks na ordem correta
             final_result = []
             for idx in range(len(chunk_paths)):
@@ -190,33 +196,38 @@ class TranscriptionProcessor:
                         with open(txt_path, 'r', encoding='utf-8') as inf:
                             final_result.append(inf.read())
                     except Exception as e:
-                        logger.error(f"[ERRO] Falha ao ler resultado do chunk: {txt_path}: {e}")
-            logger.info("[FIM] Transcrição concluída com sucesso.")
+                        logger.error(f"[ERRO] Falha ao ler resultado do chunk: {txt_path}: {e}", extra={}, stacklevel=1)
+            logger.info("[FIM] Transcrição concluída com sucesso.", extra={}, stacklevel=1)
             return "\n\n".join(final_result)
         except Exception as e:
-            logger.error(f"[ERRO FATAL] Erro na transcrição: {e}\n{traceback.format_exc()}")
+            logger.error(f"[ERRO FATAL] Erro na transcrição: {e}\n{traceback.format_exc()}", extra={}, stacklevel=1)
             return f"[ERRO FATAL] Erro na transcrição: {e}"  # Nunca lança, sempre retorna string explicando o erro
 
 def main():
+    logger.info('[BOOT] Entrou no main() do transcribe.py', extra={}, stacklevel=1)
     if len(sys.argv) < 2:
         print(json.dumps({
             "status": "error",
             "error": "Por favor, forneça o caminho do arquivo de áudio"
-        }, ensure_ascii=False))
+        }, ensure_ascii=False), flush=True)
         sys.exit(1)
     audio_path = sys.argv[1]
     output_dir = sys.argv[2] if len(sys.argv) > 2 else None
+    logger.info(f'[BOOT] Argumento recebido para áudio: {audio_path}', extra={}, stacklevel=1)
+    logger.info(f'[BOOT] Argumento recebido para output_dir: {output_dir}', extra={}, stacklevel=1)
     try:
         if not os.path.exists(audio_path):
+            logger.error(f'[BOOT] Arquivo de áudio não encontrado: {audio_path}', extra={}, stacklevel=1)
             raise FileNotFoundError(f"Arquivo não encontrado: {audio_path}")
         processor = TranscriptionProcessor()
+        logger.info('[BOOT] Instanciou TranscriptionProcessor', extra={}, stacklevel=1)
         result = processor.transcribe_audio(audio_path, output_dir)
         if output_dir and result:
             os.makedirs(output_dir, exist_ok=True)
             output_file = os.path.join(output_dir, "transcricao.txt")
             with open(output_file, 'w', encoding='utf-8') as f:
                 f.write(result)
-            logger.info(f"Transcrição salva em: {output_file}")
+            logger.info(f"Transcrição salva em: {output_file}", extra={}, stacklevel=1)
         output = {
             "status": "success",
             "text": result,
@@ -224,13 +235,13 @@ def main():
             "processing_type": "diarization_whisper",
             "timestamp": datetime.now().isoformat()
         }
-        print(json.dumps(output, ensure_ascii=False))
+        print(json.dumps(output, ensure_ascii=False), flush=True)
     except Exception as e:
-        logger.error(f"Erro na execução: {e}")
+        logger.error(f"Erro na execução: {e}", extra={}, stacklevel=1)
         print(json.dumps({
             "status": "error",
             "error": str(e)
-        }, ensure_ascii=False))
+        }, ensure_ascii=False), flush=True)
         sys.exit(1)
 
 if __name__ == "__main__":

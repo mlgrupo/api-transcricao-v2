@@ -8,12 +8,25 @@ from pydub import AudioSegment
 from diarization import diarize_audio, DiarizationSegment
 from text_processor import TextProcessor, TextProcessingRules
 import whisper
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    force=True
+)
+logger = logging.getLogger(__name__)
+logger.info('==== [BOOT] Script chunk_worker.py iniciado ===', extra={}, stacklevel=1)
+logger.info(f'[BOOT] Diretório de trabalho atual: {os.getcwd()}', extra={}, stacklevel=1)
+logger.info(f'[BOOT] Versão do Python: {sys.version}', extra={}, stacklevel=1)
 
 if __name__ == "__main__" and len(sys.argv) == 4:
+    logger.info(f'[BOOT] Argumentos recebidos: chunk_path={sys.argv[1]}, chunk_txt_path={sys.argv[2]}, chunk_err_path={sys.argv[3]}', extra={}, stacklevel=1)
     chunk_path = sys.argv[1]
     chunk_txt_path = sys.argv[2]
     chunk_err_path = sys.argv[3]
     try:
+        logger.info('[BOOT] Iniciando processamento do chunk', extra={}, stacklevel=1)
         class AudioPreprocessor:
             def __init__(self):
                 self.sample_rate = 16000
@@ -108,6 +121,7 @@ if __name__ == "__main__" and len(sys.argv) == 4:
             chunk_text = "\n\n".join(formatted_segments)
             with open(chunk_txt_path, 'w', encoding='utf-8') as outf:
                 outf.write(chunk_text)
+            logger.info('[BOOT] Processamento do chunk finalizado com sucesso', extra={}, stacklevel=1)
         except Exception as diarization_error:
             with open(chunk_err_path, 'a', encoding='utf-8') as errf:
                 errf.write(f"[ERRO] Falha na diarização: {diarization_error}\n{traceback.format_exc()}")
@@ -138,6 +152,5 @@ if __name__ == "__main__" and len(sys.argv) == 4:
         gc.collect()
         sys.exit(0)
     except Exception as e:
-        with open(chunk_err_path, 'a', encoding='utf-8') as errf:
-            errf.write(f"[ERRO FATAL] Falha inesperada no worker: {e}\n{traceback.format_exc()}")
+        logger.error(f"[ERRO FATAL] Falha inesperada no worker: {e}\n{traceback.format_exc()}", extra={}, stacklevel=1)
         sys.exit(1) 
