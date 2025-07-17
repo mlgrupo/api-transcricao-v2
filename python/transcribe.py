@@ -21,14 +21,18 @@ from pydub.effects import normalize
 import numpy as np
 
 # NOVO: Função para dividir áudio longo em partes menores
-def split_audio(input_path, chunk_length_ms=30*60*1000):  # 30 minutos
+def split_audio(input_path, chunk_length_ms=10*60*1000):  # 10 minutos por padrão
     audio = AudioSegment.from_file(input_path)
     chunks = []
     for i in range(0, len(audio), chunk_length_ms):
         chunk = audio[i:i+chunk_length_ms]
         chunk_path = f"{input_path}_chunk_{i//chunk_length_ms}.wav"
-        chunk.export(chunk_path, format="wav")
-        chunks.append(chunk_path)
+        try:
+            chunk.export(chunk_path, format="wav")
+            chunks.append(chunk_path)
+        except Exception as e:
+            logger.error(f"[ERRO] Falha ao exportar chunk {i+1}: {e}\n{traceback.format_exc()}")
+            continue
     return chunks
 
 # Processamento de texto
@@ -111,6 +115,7 @@ class TranscriptionProcessor:
         return self.model
     def transcribe_audio(self, audio_path: str, output_dir: Optional[str] = None) -> str:
         logger.info(f"[INÍCIO] Transcrição avançada com diarização: {audio_path}")
+        all_formatted_segments = []
         try:
             logger.info("[ETAPA] Carregando áudio original...")
             audio = AudioSegment.from_file(audio_path)
@@ -123,7 +128,6 @@ class TranscriptionProcessor:
             else:
                 chunk_paths = [audio_path]
                 logger.info("[OK] Áudio curto, sem divisão.")
-            all_formatted_segments = []
             model = self.load_model("medium")  # Sempre usar 'medium'
             for idx, chunk_path in enumerate(chunk_paths):
                 logger.info(f"[ETAPA] Processando chunk {idx+1}/{len(chunk_paths)}: {chunk_path}")
@@ -168,7 +172,8 @@ class TranscriptionProcessor:
                                 formatted_segments.append(f"[ERRO] Falha ao transcrever segmento {i+1} do chunk {idx+1}: {e}")
                                 continue
                             finally:
-                                os.unlink(seg_path)
+                                if os.path.exists(seg_path):
+                                    os.unlink(seg_path)
                             processed_text = self.text_processor.clean_text(result["text"])
                             timestamp = self.text_processor.format_timestamp(seg.start + idx*chunk_length_ms/1000, seg.end + idx*chunk_length_ms/1000)
                             formatted_segments.append(f"{timestamp}\n{seg.speaker}: {processed_text}")
@@ -200,10 +205,12 @@ class TranscriptionProcessor:
                             logger.error(f"[ERRO] Falha total ao transcrever chunk {idx+1}: {fallback_error}\n{traceback.format_exc()}")
                             all_formatted_segments.append(f"[ERRO] Falha total ao transcrever chunk {idx+1}: {fallback_error}")
                     finally:
-                        os.unlink(temp_path)
+                        if os.path.exists(temp_path):
+                            os.unlink(temp_path)
                     if chunk_path != audio_path:
                         try:
-                            os.remove(chunk_path)
+                            if os.path.exists(chunk_path):
+                                os.remove(chunk_path)
                             logger.info(f"[OK] Chunk temporário removido: {chunk_path}")
                         except Exception as e:
                             logger.warning(f"[WARN] Falha ao remover chunk temporário: {e}")

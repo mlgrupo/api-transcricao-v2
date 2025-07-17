@@ -12,3 +12,8 @@ services:
       - "9898:9898" # Altere para a porta que seu backend expõe
     restart: always
     depends_on: []
+    deploy:
+      resources:
+        limits:
+          cpus: '8'
+          memory: 32G
