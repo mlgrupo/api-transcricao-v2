@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Dict, Optional, List
 from datetime import datetime
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from diarization import diarize_audio, DiarizationSegment
 
 # Processamento de áudio
@@ -33,6 +34,27 @@ class AudioPreprocessor:
     def __init__(self):
         self.sample_rate = 16000
         self.channels = 1
+        
+    def speed_up_audio(self, audio: AudioSegment, speed_factor: float = 1.5) -> AudioSegment:
+        """Acelera o áudio para reduzir tempo de processamento"""
+        try:
+            # Calcular nova duração
+            new_duration = len(audio) / speed_factor
+            
+            # Acelerar o áudio
+            accelerated_audio = audio._spawn(audio.raw_data, overrides={
+                "frame_rate": int(audio.frame_rate * speed_factor)
+            })
+            
+            # Ajustar para a duração original
+            accelerated_audio = accelerated_audio.set_frame_rate(audio.frame_rate)
+            
+            logger.info(f"Áudio acelerado: {len(audio)}ms -> {len(accelerated_audio)}ms (speed: {speed_factor}x)")
+            return accelerated_audio
+        except Exception as e:
+            logger.warning(f"Erro ao acelerar áudio: {e}")
+            return audio
+        
     def normalize_audio(self, audio: AudioSegment) -> AudioSegment:
         try:
             return normalize(audio)
@@ -49,9 +71,14 @@ class AudioPreprocessor:
         except Exception as e:
             logger.warning(f"Erro na conversão de formato: {e}")
             return audio
-    def process(self, audio: AudioSegment) -> AudioSegment:
+    def process(self, audio: AudioSegment, speed_up: bool = True) -> AudioSegment:
         logger.info("Iniciando pré-processamento de áudio...")
         original_duration = len(audio)
+        
+        # Acelerar áudio se habilitado
+        if speed_up:
+            audio = self.speed_up_audio(audio, 1.5)
+        
         audio = self.normalize_audio(audio)
         audio = self.convert_format(audio)
         final_duration = len(audio)
@@ -91,57 +118,78 @@ class TranscriptionProcessor:
         self.audio_preprocessor = AudioPreprocessor()
         self.text_processor = TextPostProcessor()
         self.model = None
-    def load_model(self, model_size: str = "turbo") -> whisper.Whisper:
+        self.speed_factor = 1.5  # Áudio mais acelerado
+        self.max_workers = 8     # Usar todos os vCPUs
+
+    def load_model(self, model_size: str = "tiny") -> whisper.Whisper:
         if self.model is None:
             logger.info(f"Carregando modelo Whisper: {model_size}")
-            self.model = whisper.load_model(model_size)
+            self.model = whisper.load_model(model_size, device="cpu")
             logger.info("Modelo carregado com sucesso")
         return self.model
+
+    def transcribe_segment(self, seg: DiarizationSegment, audio: AudioSegment, model: whisper.Whisper) -> str:
+        try:
+            seg_audio = audio[ int(seg.start*1000) : int(seg.end*1000) ]
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as seg_file:
+                seg_audio.export(seg_file.name, format='wav')
+                seg_path = seg_file.name
+            result = model.transcribe(
+                seg_path,
+                language="pt",
+                task="transcribe",
+                verbose=False,
+                fp16=False,
+                temperature=0.0,
+                compression_ratio_threshold=2.4,
+                logprob_threshold=-1.0,
+                no_speech_threshold=0.6,
+                condition_on_previous_text=False,
+                beam_size=1,
+                initial_prompt=None,
+                num_workers=1,
+                best_of=1
+            )
+            os.unlink(seg_path)
+            processed_text = result["text"].strip()
+            original_start = seg.start / self.speed_factor
+            original_end = seg.end / self.speed_factor
+            timestamp = self.text_processor.format_timestamp(original_start, original_end)
+            return f"{timestamp}\n{seg.speaker}: {processed_text}"
+        except Exception as e:
+            logger.error(f"Erro ao transcrever segmento: {e}")
+            return f"[ERRO] Segmento {seg.speaker}: {str(e)}"
+
     def transcribe_audio(self, audio_path: str, output_dir: Optional[str] = None) -> str:
         logger.info(f"Iniciando transcrição avançada com diarização: {audio_path}")
         try:
-            # Carregar áudio e pré-processar
             audio = AudioSegment.from_file(audio_path)
-            audio = self.audio_preprocessor.process(audio)
-            # Salvar áudio processado temporariamente
+            audio = self.audio_preprocessor.process(audio, speed_up=True)
+            # Acelerar ainda mais
+            audio = self.audio_preprocessor.speed_up_audio(audio, self.speed_factor)
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
                 audio.export(temp_file.name, format='wav')
                 temp_path = temp_file.name
-            # Diarização real
-            logger.info("Rodando diarização com pyannote.audio...")
+            # Diarização rápida
             diarization_segments: List[DiarizationSegment] = diarize_audio(temp_path)
             logger.info(f"{len(diarization_segments)} segmentos de locutores detectados.")
-            # Carregar modelo Whisper (otimizado para máxima velocidade)
-            model = self.load_model("small")  # Small é mais rápido que turbo para CPU
-            # Transcrever cada segmento
+            model = self.load_model("tiny")
+            logger.info(f"Iniciando transcrição paralela de {len(diarization_segments)} segmentos...")
             formatted_segments = []
-            for i, seg in enumerate(diarization_segments):
-                # Extrair segmento do áudio
-                seg_audio = audio[ int(seg.start*1000) : int(seg.end*1000) ]
-                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as seg_file:
-                    seg_audio.export(seg_file.name, format='wav')
-                    seg_path = seg_file.name
-                # Transcrever segmento com configurações otimizadas para máxima velocidade
-                result = model.transcribe(
-                    seg_path,
-                    language="pt",
-                    task="transcribe",
-                    verbose=False,
-                    fp16=False,  # Desabilitado para CPU-only
-                    temperature=0.0,
-                    compression_ratio_threshold=2.4,
-                    logprob_threshold=-1.0,
-                    no_speech_threshold=0.6,
-                    condition_on_previous_text=False,  # Desabilitado para máxima velocidade
-                    beam_size=1,  # Reduzido para máxima velocidade
-                    initial_prompt="Este é um áudio em português brasileiro.",
-                    num_workers=6,  # Usar 6 workers para paralelização
-                    best_of=1  # Reduzir busca para velocidade
-                )
-                os.unlink(seg_path)
-                processed_text = self.text_processor.clean_text(result["text"])
-                timestamp = self.text_processor.format_timestamp(seg.start, seg.end)
-                formatted_segments.append(f"{timestamp}\n{seg.speaker}: {processed_text}")
+            max_workers = min(self.max_workers, len(diarization_segments)) or 1
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_segment = {
+                    executor.submit(self.transcribe_segment, seg, audio, model): seg
+                    for seg in diarization_segments
+                }
+                for future in as_completed(future_to_segment):
+                    segment = future_to_segment[future]
+                    try:
+                        result = future.result()
+                        formatted_segments.append(result)
+                    except Exception as e:
+                        logger.error(f"Erro no segmento {segment.speaker}: {e}")
+                        formatted_segments.append(f"[ERRO] {segment.speaker}: {str(e)}")
             os.unlink(temp_path)
             return "\n\n".join(formatted_segments)
         except Exception as e:
