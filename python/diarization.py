@@ -41,9 +41,7 @@ def diarize_audio(audio_path: str) -> List[DiarizationSegment]:
         logger.info("Pipeline carregado com sucesso.")
         # Chamada sem min_duration_on/min_duration_off
         diarization = pipeline(
-            audio_path,
-            min_speakers=1,
-            max_speakers=2
+            audio_path
         )
         segments = []
         for turn, _, speaker in diarization.itertracks(yield_label=True):
