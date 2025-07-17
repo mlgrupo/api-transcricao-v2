@@ -21,9 +21,9 @@ export class JobScheduler {
   }
 
   private setupDriveWatcherJob(): void {
-    // Polling leve a cada 5 minutos (otimizado para dar mais recursos à transcrição)
+    // Polling leve a cada 1 minuto (ajustado para busca mais frequente)
     const pollJob = new CronJob(
-      '*/5 * * * *',
+      '*/1 * * * *',
       async () => {
         this.logger.info('Iniciando polling leve de novos vídeos...');
         try {

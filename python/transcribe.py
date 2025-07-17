@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Sistema de Transcrição Avançado com Diarização Real de Locutores (SpeechBrain + Whisper)
+Versão corrigida do transcribe.py com fix para o problema do prompt
 """
 import sys
 import json
@@ -22,7 +22,15 @@ from pydub.effects import normalize
 import numpy as np
 
 # Processamento de texto
-from text_processor import TextProcessor, TextProcessingRules
+try:
+    from text_processor import TextProcessor, TextProcessingRules
+except ImportError:
+    # Fallback se módulo não existir
+    class TextProcessor:
+        def __init__(self, rules): pass
+        def process(self, text): return text
+    class TextProcessingRules:
+        def __init__(self, **kwargs): pass
 
 # Configuração de logging
 logging.basicConfig(
@@ -110,6 +118,34 @@ class TextPostProcessor:
         end_s = end_seconds % 60
         return f"[{start_h:02d}:{start_m:02d}:{start_s:02d} - {end_h:02d}:{end_m:02d}:{end_s:02d}]"
 
+def is_prompt_confusion(text: str) -> bool:
+    """Detecta se o Whisper está confundindo prompt com áudio"""
+    text_lower = text.lower().strip()
+    
+    # Frases que indicam confusão com prompt
+    prompt_indicators = [
+        "transcreva com a maior precisão possível",
+        "transcreva com maior precisão",
+        "transcreva com a maior precisão",
+        "áudio em português brasileiro",
+        "este é um áudio",
+        "português brasileiro",
+        "transcreva",
+        "com a maior precisão"
+    ]
+    
+    # Se texto é muito curto e contém indicadores
+    if len(text_lower) < 100:
+        for indicator in prompt_indicators:
+            if indicator in text_lower:
+                return True
+    
+    # Se texto é exatamente um dos indicadores
+    if text_lower in prompt_indicators:
+        return True
+        
+    return False
+
 class TranscriptionProcessor:
     def __init__(self):
         self.audio_preprocessor = AudioPreprocessor()
@@ -138,37 +174,88 @@ class TranscriptionProcessor:
                 signal.signal(signal.SIGALRM, timeout_handler)
                 signal.alarm(120)  # 2 minutos
                 
-                result = model.transcribe(
-                    seg_path,
-                    language="pt",
-                    task="transcribe",
-                    verbose=False,
-                    fp16=False,
-                    temperature=0.0 if attempt == 0 else 0.2,  # Aumentar temperatura em retry
-                    compression_ratio_threshold=2.4,
-                    logprob_threshold=-1.0,
-                    no_speech_threshold=0.6,
-                    condition_on_previous_text=attempt == 0,  # Desabilitar em retry
-                    initial_prompt="Este é um áudio em português brasileiro. Transcreva com a maior precisão possível."
-                )
+                # Configurações diferentes para cada tentativa
+                if attempt == 0:
+                    # Primeira tentativa: sem prompt
+                    result = model.transcribe(
+                        seg_path,
+                        language="pt",
+                        task="transcribe",
+                        verbose=False,
+                        fp16=False,
+                        temperature=0.0,
+                        compression_ratio_threshold=2.4,
+                        logprob_threshold=-1.0,
+                        no_speech_threshold=0.5,
+                        condition_on_previous_text=False,
+                        initial_prompt=None
+                    )
+                elif attempt == 1:
+                    # Segunda tentativa: temperatura mais alta
+                    result = model.transcribe(
+                        seg_path,
+                        language="pt",
+                        task="transcribe",
+                        verbose=False,
+                        fp16=False,
+                        temperature=0.3,
+                        compression_ratio_threshold=2.4,
+                        logprob_threshold=-1.0,
+                        no_speech_threshold=0.3,
+                        condition_on_previous_text=False,
+                        initial_prompt=None
+                    )
+                else:
+                    # Terceira tentativa: parâmetros mais permissivos
+                    result = model.transcribe(
+                        seg_path,
+                        language="pt",
+                        task="transcribe",
+                        verbose=False,
+                        fp16=False,
+                        temperature=0.5,
+                        compression_ratio_threshold=2.4,
+                        logprob_threshold=-1.0,
+                        no_speech_threshold=0.1,
+                        condition_on_previous_text=False,
+                        initial_prompt=None
+                    )
                 
                 signal.alarm(0)  # Cancelar timeout
-                return result["text"]
+                
+                # Verificar se o resultado não é confusão de prompt
+                transcription = result["text"].strip()
+                
+                if is_prompt_confusion(transcription):
+                    logger.warning(f"Detectada confusão do prompt (tentativa {attempt + 1}): '{transcription}'")
+                    if attempt < retry_count:
+                        continue
+                    return ""  # Retornar vazio em vez de texto confuso
+                
+                # Se resultado muito curto sem conteúdo útil
+                if len(transcription) < 3:
+                    logger.warning(f"Resultado muito curto (tentativa {attempt + 1}): '{transcription}'")
+                    if attempt < retry_count:
+                        continue
+                    return ""
+                
+                logger.info("Texto processado com sucesso")
+                return transcription
                 
             except TimeoutException:
                 signal.alarm(0)
                 logger.warning(f"Timeout na transcrição do segmento (tentativa {attempt + 1})")
                 if attempt < retry_count:
                     continue
-                return "[Erro: timeout na transcrição]"
+                return ""
             except Exception as e:
                 signal.alarm(0)
                 logger.warning(f"Erro na transcrição do segmento (tentativa {attempt + 1}): {e}")
                 if attempt < retry_count:
                     continue
-                return "[Erro na transcrição do segmento]"
+                return ""
         
-        return "[Erro: não foi possível transcrever este segmento]"
+        return ""
     
     def transcribe_audio(self, audio_path: str, output_dir: Optional[str] = None) -> str:
         logger.info(f"Iniciando transcrição avançada com diarização: {audio_path}")
@@ -223,8 +310,8 @@ class TranscriptionProcessor:
                     
                     seg_audio = audio[start_ms:end_ms]
                     
-                    # Pular segmentos muito curtos (menos de 1 segundo)
-                    if len(seg_audio) < 1000:
+                    # Pular segmentos muito curtos (menos de 2 segundos)
+                    if len(seg_audio) < 2000:
                         logger.info(f"Pulando segmento muito curto: {len(seg_audio)}ms")
                         continue
                     
@@ -234,27 +321,33 @@ class TranscriptionProcessor:
                         temp_files.append(seg_path)
                     
                     # Transcrever segmento
-                    transcription_text = self.transcribe_segment_safe(model, seg_path, retry_count=1)
+                    transcription_text = self.transcribe_segment_safe(model, seg_path, retry_count=2)
                     
-                    # Processar texto
-                    processed_text = self.text_processor.clean_text(transcription_text)
-                    
-                    if processed_text.strip():  # Só adicionar se tiver conteúdo
-                        timestamp = self.text_processor.format_timestamp(seg.start, seg.end)
-                        formatted_segments.append(f"{timestamp}\n{seg.speaker}: {processed_text}")
+                    # Processar texto se não está vazio
+                    if transcription_text.strip():
+                        processed_text = self.text_processor.clean_text(transcription_text)
+                        
+                        # Verificar novamente se não é confusão de prompt após limpeza
+                        if processed_text.strip() and not is_prompt_confusion(processed_text):
+                            timestamp = self.text_processor.format_timestamp(seg.start, seg.end)
+                            formatted_segments.append(f"{timestamp}\n{seg.speaker}: {processed_text}")
+                            logger.info(f"Segmento {i+1} transcrito: {len(processed_text)} caracteres")
+                        else:
+                            logger.info(f"Segmento {i+1} descartado: confusão de prompt ou vazio")
+                    else:
+                        logger.info(f"Segmento {i+1} vazio ou inválido")
                 
                 except Exception as e:
                     logger.error(f"Erro ao processar segmento {i+1}: {e}")
-                    # Continuar com próximo segmento
                     continue
             
-            # Verificar se temos resultados
+            # Verificar se temos resultados válidos
             if not formatted_segments:
                 logger.warning("Nenhum segmento foi transcrito com sucesso")
-                return "Não foi possível transcrever este áudio. Tente novamente ou verifique a qualidade do arquivo."
+                return "Não foi possível transcrever este áudio. O áudio pode estar silencioso, com baixa qualidade ou sem fala clara."
             
             result = "\n\n".join(formatted_segments)
-            logger.info(f"Transcrição concluída com {len(formatted_segments)} segmentos")
+            logger.info(f"Transcrição concluída com {len(formatted_segments)} segmentos válidos")
             
             return result
             
