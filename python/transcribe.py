@@ -187,7 +187,7 @@ class TranscriptionProcessor:
         self.text_processor = TextPostProcessor()
         self.model = None # Áudio mais acelerado
         self.max_workers = 8     # Usar todos os vCPUs
-        self.model_size = "turbo" # Forçar modelo turbo
+        self.model_size = "medium" # Forçar modelo medium
 
     def load_model(self, model_size: str = None) -> whisper.Whisper:
         if self.model is None:
@@ -242,7 +242,7 @@ class TranscriptionProcessor:
             # Diarização rápida
             diarization_segments: List[DiarizationSegment] = diarize_audio(temp_path)
             logger.info(f"{len(diarization_segments)} segmentos de locutores detectados.")
-            model = self.load_model("turbo")
+            model = self.load_model("medium")
             logger.info(f"Iniciando transcrição paralela de {len(diarization_segments)} segmentos...")
             formatted_segments = []
             max_workers = min(self.max_workers, len(diarization_segments)) or 1
