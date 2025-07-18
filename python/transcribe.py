@@ -196,7 +196,7 @@ def is_invalid_transcription(text: str) -> bool:
         return True
     
     # Verificar se é muito curto (menos de 5 caracteres) - mais permissivo
-    if len(text.strip()) < 5:
+    if len(text.strip()) < 2:
         return True
     
     return False
@@ -238,10 +238,10 @@ class TranscriptionProcessor:
                         task="transcribe",
                         verbose=False,
                         fp16=False,
-                        temperature=0.0,
-                        compression_ratio_threshold=2.2,  # Menos restritivo
-                        logprob_threshold=-0.8,  # Menos restritivo
-                        no_speech_threshold=0.5,  # Menos rigoroso
+                        temperature=0.2,
+                        compression_ratio_threshold=1.8,  # Menos restritivo
+                        logprob_threshold=-1.2,  # Menos restritivo
+                        no_speech_threshold=0.2,  # Menos rigoroso
                         condition_on_previous_text=False,
                         initial_prompt="Transcrição em português brasileiro com múltiplos falantes.",
                         suppress_tokens=[-1],
@@ -403,8 +403,8 @@ class TranscriptionProcessor:
                     
                     seg_audio = audio[start_ms:end_ms]
                     
-                    # Ser menos restritivo com segmentos curtos - aceitar 1.5 segundos
-                    if len(seg_audio) < 1500:
+                    # Ser menos restritivo com segmentos curtos - aceitar 0.5 segundos
+                    if len(seg_audio) < 500:
                         logger.info(f"Pulando segmento muito curto: {len(seg_audio)}ms")
                         continue
                     
