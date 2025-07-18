@@ -218,11 +218,7 @@ def diarize_audio(audio_path: str) -> List[DiarizationSegment]:
             
             # Primeira tentativa: configuração agressiva para múltiplos speakers
             try:
-                diarization = pipeline(
-                    audio_path,
-                    min_speakers=2,   # Assumir pelo menos 2 speakers
-                    max_speakers=10,  # Permitir até 10 speakers
-                )
+                diarization = pipeline(audio_path) 
                 logger.info("Diarização concluída na primeira tentativa")
                 
             except Exception as e:

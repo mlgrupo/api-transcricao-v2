@@ -227,7 +227,7 @@ class TranscriptionProcessor:
             try:
                 # Timeout mais generoso com recursos disponíveis - 3 minutos por segmento
                 signal.signal(signal.SIGALRM, timeout_handler)
-                signal.alarm(6000)
+                signal.alarm(600)
                 
                 # Configurações otimizadas para cada tentativa
                 if attempt == 0:
