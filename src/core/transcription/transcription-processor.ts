@@ -57,7 +57,7 @@ export class TranscriptionProcessor {
     const execAsync = promisify(exec);
     
     // Usar nosso script gratuito
-    const scriptPath = path.join(process.cwd(), "python", "transcription_free.py");
+    const scriptPath = path.join(process.cwd(), "python", "transcription.py");
 
     try {
       // Verificações iniciais
@@ -97,7 +97,7 @@ export class TranscriptionProcessor {
     // Verificar script Python gratuito
     const scriptExists = await fs.access(scriptPath).then(() => true).catch(() => false);
     if (!scriptExists) {
-      throw new Error(`Script gratuito não encontrado: ${scriptPath}. Certifique-se de que transcription_free.py está na pasta python/`);
+      throw new Error(`Script gratuito não encontrado: ${scriptPath}. Certifique-se de que transcription.py está na pasta python/`);
     }
 
     // Verificar arquivo de áudio
@@ -117,7 +117,7 @@ export class TranscriptionProcessor {
     this.logger.info("Validação de ambiente concluída", {
       audioPath,
       fileSize: `${fileSizeMB}MB`,
-      scriptType: "transcription_free.py"
+      scriptType: "transcription.py"
     });
   }
 
@@ -304,7 +304,7 @@ except Exception as e:
         .catch(() => false);
       
       // Verificar script gratuito
-      const scriptPath = path.join(process.cwd(), "python", "transcription_free.py");
+      const scriptPath = path.join(process.cwd(), "python", "transcription.py");
       const scriptAvailable = await fs.access(scriptPath)
         .then(() => true)
         .catch(() => false);
