@@ -1,529 +1,519 @@
 #!/usr/bin/env python3
 """
-Diarização EQUILIBRADA - Sempre 3 chunks para máxima estabilidade
-FOCO: Qualidade máxima da diarização, divisão fixa em 3 chunks
+Sistema de Transcrição com TIMEOUT FLEXÍVEL
+CONFIGURÁVEL: SEM timeout OU timeout 4x maior via variável de ambiente
 """
-from pyannote.audio import Pipeline
-import os
 import sys
-from typing import List
+import json
 import logging
+import whisper
+import os
+import tempfile
+from pathlib import Path
+from typing import Dict, Optional, List
+from datetime import datetime
+import re
 import signal
 import time
+
+# Processamento de áudio
 from pydub import AudioSegment
-import torch
-import tempfile
-import psutil
-import gc
-import math
+from pydub.effects import normalize
 
-# Token HuggingFace
-HF_TOKEN = os.environ.get("HF_TOKEN")
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configuração de logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-class DiarizationSegment:
-    def __init__(self, start: float, end: float, speaker: str):
-        self.start = start
-        self.end = end
-        self.speaker = speaker
+# ========== CONFIGURAÇÃO DE TIMEOUT ==========
+# Defina o comportamento via variável de ambiente:
+# export TRANSCRIPTION_TIMEOUT_MODE="none"     # SEM timeout (padrão)
+# export TRANSCRIPTION_TIMEOUT_MODE="4x"       # Timeout 4x o tamanho do áudio
+# export TRANSCRIPTION_TIMEOUT_MODE="custom"   # Timeout customizado
+# export CUSTOM_TIMEOUT_MULTIPLIER="6"         # Para modo custom: 6x o áudio
 
-    def to_dict(self):
-        return {"start": self.start, "end": self.end, "speaker": self.speaker}
+TIMEOUT_MODE = os.environ.get("TRANSCRIPTION_TIMEOUT_MODE", "none").lower()
+CUSTOM_MULTIPLIER = float(os.environ.get("CUSTOM_TIMEOUT_MULTIPLIER", "4"))
+
+logger.info(f"🎯 MODO DE TIMEOUT CONFIGURADO: {TIMEOUT_MODE.upper()}")
 
 class TimeoutException(Exception):
     pass
 
 def timeout_handler(signum, frame):
-    raise TimeoutException("Timeout na diarização")
+    raise TimeoutException("Timeout no processamento")
 
-def intelligent_fallback_diarization(audio_path: str, duration: float) -> List[DiarizationSegment]:
-    """Fallback inteligente que mantém fidelidade usando análise de áudio"""
-    logger.info("🔄 Executando diarização inteligente de fallback...")
-    
-    try:
-        audio = AudioSegment.from_file(audio_path)
-        
-        # Análise mais sofisticada para detectar mudanças de speaker
-        # 1. Detectar silêncios para segmentação inicial
-        silence_thresh = audio.dBFS - 16  # Mais sensível a mudanças
-        min_silence_len = 800  # 0.8 segundos
-        
-        # 2. Análise de energia para detectar transições
-        chunks = []
-        chunk_size = 10000  # 10 segundos para análise
-        overlap = 2000     # 2 segundos de overlap
-        
-        for i in range(0, len(audio), chunk_size - overlap):
-            chunk = audio[i:i + chunk_size]
-            if len(chunk) >= 3000:  # Mínimo 3 segundos
-                chunks.append((i / 1000.0, chunk))
-        
-        segments = []
-        current_speaker = 0
-        speaker_duration = 0
-        
-        for start_time, chunk in chunks:
-            chunk_duration = len(chunk) / 1000.0
-            
-            # Detectar mudança de speaker baseado em:
-            # 1. Duração do speaker atual (15-45 segundos típico)
-            # 2. Mudanças significativas na energia do áudio
-            # 3. Pausas/silêncios
-            
-            should_change_speaker = False
-            
-            # Mudança por tempo (evitar speakers muito longos)
-            if speaker_duration > 45.0:
-                should_change_speaker = True
-            # Mudança por energia (diferença significativa)
-            elif speaker_duration > 8.0:  # Mínimo 8s por speaker
-                try:
-                    chunk_energy = chunk.dBFS
-                    # Se energia mudou muito, pode ser speaker diferente
-                    if hasattr(segments, '__len__') and len(segments) > 0:
-                        prev_chunk_start = max(0, int((start_time - 5) * 1000))
-                        prev_chunk_end = int(start_time * 1000)
-                        if prev_chunk_end > prev_chunk_start:
-                            prev_chunk = audio[prev_chunk_start:prev_chunk_end]
-                            if abs(chunk_energy - prev_chunk.dBFS) > 8:  # 8dB diferença
-                                should_change_speaker = True
-                except:
-                    pass
-            
-            if should_change_speaker:
-                current_speaker = (current_speaker + 1) % 8  # Até 8 speakers
-                speaker_duration = 0
-            
-            # Criar segmento
-            end_time = start_time + chunk_duration
-            segments.append(DiarizationSegment(
-                start_time, 
-                min(end_time, duration),
-                f"SPEAKER_{current_speaker:02d}"
-            ))
-            
-            speaker_duration += chunk_duration
-        
-        # Mesclar segmentos consecutivos do mesmo speaker
-        if segments:
-            merged = [segments[0]]
-            for seg in segments[1:]:
-                last = merged[-1]
-                if last.speaker == seg.speaker and seg.start - last.end <= 3.0:
-                    last.end = seg.end
-                else:
-                    merged.append(seg)
-            segments = merged
-        
-        # Se ainda temos poucos segmentos, adicionar mais variação
-        if len(set(seg.speaker for seg in segments)) < 2 and duration > 300:
-            logger.info("Aumentando variação de speakers para áudio longo...")
-            enhanced_segments = []
-            for seg in segments:
-                seg_duration = seg.end - seg.start
-                if seg_duration > 60:  # Segmentos > 1min, dividir
-                    mid_point = seg.start + seg_duration / 2
-                    new_speaker = f"SPEAKER_{(int(seg.speaker.split('_')[1]) + 1) % 6:02d}"
-                    enhanced_segments.append(DiarizationSegment(seg.start, mid_point, seg.speaker))
-                    enhanced_segments.append(DiarizationSegment(mid_point, seg.end, new_speaker))
-                else:
-                    enhanced_segments.append(seg)
-            segments = enhanced_segments
-        
-        speakers = set(seg.speaker for seg in segments)
-        logger.info(f"✅ Fallback inteligente: {len(segments)} segmentos, {len(speakers)} speakers")
-        return segments
-        
-    except Exception as e:
-        logger.error(f"Erro no fallback inteligente: {e}")
-        # Último recurso: segmentação temporal simples
-        segments = []
-        segment_duration = min(30.0, duration / 4)  # Máximo 4 segmentos
-        current_time = 0.0
-        speaker_id = 0
-        
-        while current_time < duration:
-            end_time = min(current_time + segment_duration, duration)
-            segments.append(DiarizationSegment(
-                current_time, end_time, f"SPEAKER_{speaker_id:02d}"
-            ))
-            current_time = end_time
-            speaker_id = (speaker_id + 1) % 3
-        
-        return segments
-
-class ServerResourceManager:
-    """Gerencia recursos priorizando QUALIDADE da diarização"""
+class FlexibleTimeoutManager:
+    """Gerenciador flexível de timeouts"""
     
     def __init__(self):
-        self.max_cpu_cores = min(6, os.cpu_count())
-        self.max_ram_gb = 28
+        self.mode = TIMEOUT_MODE
+        self.custom_multiplier = CUSTOM_MULTIPLIER
         
-    def check_resources(self) -> dict:
-        """Verifica recursos disponíveis do servidor"""
-        cpu_percent = psutil.cpu_percent(interval=1)
-        memory = psutil.virtual_memory()
-        
-        return {
-            'cpu_percent': cpu_percent,
-            'memory_percent': memory.percent,
-            'memory_available_gb': memory.available / (1024**3),
-            'safe_to_process': cpu_percent < 85 and memory.percent < 80
-        }
+    def should_use_timeout(self, audio_duration_minutes: float) -> bool:
+        """Decide se deve usar timeout baseado na configuração"""
+        if self.mode == "none":
+            return False
+        elif self.mode in ["4x", "custom"]:
+            return True
+        else:
+            # Padrão: sem timeout
+            return False
     
-    def get_chunk_timeout(self, chunk_duration: float) -> int:
-        """Calcula timeout dinâmico baseado na duração do chunk"""
-        # Timeout base: 2 minutos por minuto de áudio + buffer
-        base_timeout = int(chunk_duration / 60 * 2)  # 2 min por min de áudio
-        buffer_timeout = 5  # 5 minutos de buffer
+    def calculate_timeout(self, audio_duration_minutes: float) -> int:
+        """Calcula timeout baseado na configuração"""
+        if not self.should_use_timeout(audio_duration_minutes):
+            return 0  # Sem timeout
         
-        # Mínimo 10 minutos, máximo 30 minutos
-        timeout = max(10, min(30, base_timeout + buffer_timeout))
-        logger.info(f"Timeout calculado para chunk de {chunk_duration/60:.1f}min: {timeout}min")
-        return timeout
+        if self.mode == "4x":
+            multiplier = 4
+        elif self.mode == "custom":
+            multiplier = self.custom_multiplier
+        else:
+            multiplier = 4
+        
+        # Cálculo: X minutos por minuto de áudio + buffer de 30 min
+        timeout_minutes = int(audio_duration_minutes * multiplier) + 30
+        
+        # Limites: mínimo 30 min, máximo 12 horas
+        timeout_minutes = max(30, min(720, timeout_minutes))
+        
+        return timeout_minutes
     
-    def configure_torch(self):
-        """Configuração otimizada para QUALIDADE"""
-        torch.set_num_threads(self.max_cpu_cores)
-        
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        
-        gc.collect()
+    def log_timeout_info(self, audio_duration_minutes: float, chunk_duration_minutes: float = None):
+        """Log informações sobre timeout configurado"""
+        if not self.should_use_timeout(audio_duration_minutes):
+            logger.info(f"⏳ CONFIGURADO: SEM TIMEOUT - paciência infinita")
+        else:
+            timeout_min = self.calculate_timeout(audio_duration_minutes)
+            chunk_timeout = self.calculate_timeout(chunk_duration_minutes) if chunk_duration_minutes else None
+            
+            logger.info(f"⏰ CONFIGURADO: Timeout {self.mode.upper()}")
+            logger.info(f"   📊 Áudio {audio_duration_minutes:.1f}min → Timeout {timeout_min}min")
+            if chunk_timeout:
+                logger.info(f"   🔗 Chunk {chunk_duration_minutes:.1f}min → Timeout {chunk_timeout}min")
 
-def get_audio_duration(audio_path: str) -> float:
-    """Retorna duração do áudio em segundos"""
-    try:
-        audio = AudioSegment.from_file(audio_path)
-        return len(audio) / 1000.0
-    except Exception as e:
-        logger.warning(f"Erro ao obter duração do áudio: {e}")
-        return 0
+class AudioPreprocessor:
+    def __init__(self):
+        self.sample_rate = 16000
+        self.channels = 1
+    
+    def process(self, audio: AudioSegment) -> AudioSegment:
+        logger.info("🔧 Pré-processando áudio...")
+        try:
+            audio = normalize(audio, headroom=0.1)
+            audio = audio.set_frame_rate(self.sample_rate).set_channels(self.channels)
+            if audio.dBFS < -30:
+                audio = audio + (25 - abs(audio.dBFS))
+            logger.info(f"✅ Pré-processamento concluído")
+            return audio
+        except Exception as e:
+            logger.warning(f"Erro no pré-processamento: {e}")
+            return audio
 
-def split_audio_into_3_chunks(audio_path: str) -> List[tuple]:
-    """NOVO: Sempre divide em exatamente 3 chunks para máxima estabilidade"""
-    try:
-        audio = AudioSegment.from_file(audio_path)
-        total_duration = len(audio) / 1000.0
-        
-        logger.info(f"🔪 DIVISÃO FIXA: Dividindo áudio de {total_duration/60:.1f}min em exatamente 3 chunks")
-        
-        # Calcular duração de cada chunk
-        chunk_duration = total_duration / 3.0
-        overlap = min(30, chunk_duration * 0.1)  # 10% overlap, máximo 30s
-        
-        logger.info(f"📊 Cada chunk terá ~{chunk_duration/60:.1f}min com overlap de {overlap}s")
-        
-        chunks = []
-        
-        # Chunk 1: início até 1/3 + overlap
-        start_1 = 0
-        end_1 = chunk_duration + overlap
-        chunk_1_audio = audio[int(start_1 * 1000):int(min(end_1, total_duration) * 1000)]
-        
-        # Chunk 2: 1/3 - overlap até 2/3 + overlap  
-        start_2 = chunk_duration - overlap
-        end_2 = (chunk_duration * 2) + overlap
-        chunk_2_audio = audio[int(start_2 * 1000):int(min(end_2, total_duration) * 1000)]
-        
-        # Chunk 3: 2/3 - overlap até o final
-        start_3 = (chunk_duration * 2) - overlap
-        end_3 = total_duration
-        chunk_3_audio = audio[int(start_3 * 1000):int(end_3 * 1000)]
-        
-        # Salvar chunks temporários
-        for i, (chunk_audio, start_time, end_time) in enumerate([
-            (chunk_1_audio, start_1, min(end_1, total_duration)),
-            (chunk_2_audio, start_2, min(end_2, total_duration)), 
-            (chunk_3_audio, start_3, end_3)
-        ], 1):
-            with tempfile.NamedTemporaryFile(suffix=f'_chunk{i}.wav', delete=False) as temp_file:
-                chunk_audio.export(temp_file.name, format='wav', parameters=["-ac", "1", "-ar", "16000"])
-                chunk_info = (temp_file.name, start_time, end_time)
-                chunks.append(chunk_info)
-                logger.info(f"✅ Chunk {i}: {start_time/60:.1f}min - {end_time/60:.1f}min ({(end_time-start_time)/60:.1f}min)")
-        
-        logger.info(f"🎯 Divisão concluída: 3 chunks criados com sucesso")
-        return chunks
-        
-    except Exception as e:
-        logger.error(f"Erro ao dividir áudio em 3 chunks: {e}")
-        return [(audio_path, 0.0, get_audio_duration(audio_path))]
+class TextPostProcessor:
+    def clean_text(self, text: str) -> str:
+        if not text or not text.strip():
+            return ""
+        text = re.sub(r'\s+', ' ', text)
+        return text.strip()
+    
+    def format_timestamp(self, start_time: float, end_time: float) -> str:
+        start_h, start_m, start_s = int(start_time // 3600), int((start_time % 3600) // 60), int(start_time % 60)
+        end_h, end_m, end_s = int(end_time // 3600), int((end_time % 3600) // 60), int(end_time % 60)
+        return f"[{start_h:02d}:{start_m:02d}:{start_s:02d} - {end_h:02d}:{end_m:02d}:{end_s:02d}]"
+    
+    def format_speaker_name(self, speaker: str) -> str:
+        if speaker.startswith("SPEAKER_"):
+            try:
+                number = int(speaker.split("_")[1]) + 1
+                return f"Speaker {number:02d}"
+            except:
+                return speaker
+        return speaker
 
-def diarize_chunk_optimized(pipeline, chunk_path: str, chunk_info: str, timeout_minutes: int = 15) -> List[DiarizationSegment]:
-    """QUALIDADE MÁXIMA: Configurações otimizadas para fidelidade"""
-    segments = []
+def is_invalid_transcription(text: str) -> bool:
+    """Detecção de transcrições inválidas"""
+    text_lower = text.lower().strip()
+    
+    bad_indicators = [
+        "transcreva com a maior precisão",
+        "áudio em português brasileiro",
+        "transcreva", "transcrição"
+    ]
+    
+    for indicator in bad_indicators:
+        if indicator in text_lower:
+            return True
+    
+    if len(text.strip()) < 2:
+        return True
+    
+    words = text_lower.split()
+    if len(words) > 5:
+        word_counts = {}
+        for word in words:
+            if len(word) > 3:
+                word_counts[word] = word_counts.get(word, 0) + 1
+        for word, count in word_counts.items():
+            if count > 8:
+                return True
+    
+    return False
+
+def create_fallback_transcription(audio_path: str) -> str:
+    """Fallback ultimate usando apenas Whisper"""
+    logger.info("🚨 FALLBACK: Whisper direto")
     
     try:
-        # Timeout específico para este chunk
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(timeout_minutes * 60)
+        # Escolher modelo baseado no modo de timeout
+        timeout_manager = FlexibleTimeoutManager()
         
-        logger.info(f"🔄 Processando {chunk_info} (timeout: {timeout_minutes}min)")
+        if timeout_manager.mode == "none":
+            model_name = "large-v2"  # Melhor qualidade sem pressa
+        else:
+            model_name = "medium"    # Mais rápido com timeout
         
-        # CONFIGURAÇÃO PARA MÁXIMA QUALIDADE
-        diarization = pipeline(
-            chunk_path,
-            min_speakers=1,
-            max_speakers=8,
+        model = whisper.load_model(model_name, device="cpu")
+        logger.info(f"🤖 Modelo {model_name} carregado para fallback")
+        
+        # Aplicar timeout se configurado
+        audio_duration = len(AudioSegment.from_file(audio_path)) / 1000.0 / 60.0
+        timeout_min = timeout_manager.calculate_timeout(audio_duration)
+        
+        if timeout_manager.should_use_timeout(audio_duration):
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(timeout_min * 60)
+            logger.info(f"⏰ Fallback com timeout de {timeout_min}min")
+        else:
+            logger.info("⏳ Fallback SEM TIMEOUT")
+        
+        result = model.transcribe(
+            audio_path,
+            language="pt",
+            task="transcribe",
+            verbose=False,
+            fp16=False,
+            temperature=0.1
         )
         
-        signal.alarm(0)
+        if timeout_manager.should_use_timeout(audio_duration):
+            signal.alarm(0)
         
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
-            segments.append(DiarizationSegment(turn.start, turn.end, speaker))
+        text = result["text"].strip()
         
-        logger.info(f"✅ {chunk_info} processado: {len(segments)} segmentos")
+        if text and not is_invalid_transcription(text):
+            # Criar segmentação simples
+            sentences = re.split(r'[.!?]+', text)
+            filtered_sentences = [s.strip() for s in sentences if s.strip()]
+            
+            formatted_segments = []
+            segment_duration = 30
+            current_time = 0
+            speaker_id = 1
+            
+            for i, sentence in enumerate(filtered_sentences):
+                if sentence:
+                    end_time = current_time + segment_duration
+                    timestamp = f"[{int(current_time//3600):02d}:{int((current_time%3600)//60):02d}:{int(current_time%60):02d} - {int(end_time//3600):02d}:{int((end_time%3600)//60):02d}:{int(end_time%60):02d}]"
+                    speaker = f"Speaker {speaker_id:02d}"
+                    formatted_segments.append(f"{timestamp} {speaker}:\n{sentence}.")
+                    current_time = end_time
+                    
+                    if (i + 1) % 3 == 0:
+                        speaker_id = (speaker_id % 3) + 1
+            
+            result_text = "\n\n".join(formatted_segments)
+            logger.info("✅ Fallback concluído com sucesso")
+            return result_text
         
-        # Limpeza de memória após chunk
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        
-        return segments
+        return "Não foi possível transcrever este áudio."
         
     except TimeoutException:
         signal.alarm(0)
-        logger.error(f"❌ Timeout no {chunk_info} ({timeout_minutes}min) - usando fallback inteligente")
-        
-        # FALLBACK INTELIGENTE em caso de timeout
-        chunk_duration = get_audio_duration(chunk_path)
-        return intelligent_fallback_diarization(chunk_path, chunk_duration)
-        
+        logger.error(f"⏰ Timeout no fallback ({timeout_min}min)")
+        return "Timeout na transcrição. Arquivo muito complexo ou sistema sobrecarregado."
     except Exception as e:
-        signal.alarm(0)
-        logger.error(f"❌ Erro no {chunk_info}: {e} - usando fallback inteligente")
-        
-        # FALLBACK INTELIGENTE em caso de erro
-        chunk_duration = get_audio_duration(chunk_path)
-        return intelligent_fallback_diarization(chunk_path, chunk_duration)
+        if timeout_manager.should_use_timeout(audio_duration):
+            signal.alarm(0)
+        logger.error(f"❌ Erro no fallback: {e}")
+        return f"Erro na transcrição: {str(e)}"
 
-def merge_3_chunks_advanced(chunk_results: List[tuple]) -> List[DiarizationSegment]:
-    """MELHORADO: Mesclagem específica para 3 chunks"""
-    if len(chunk_results) != 3:
-        logger.warning(f"⚠️ Esperado 3 chunks, recebido {len(chunk_results)}")
+class FlexibleTranscriptionProcessor:
+    def __init__(self):
+        self.audio_preprocessor = AudioPreprocessor()
+        self.text_processor = TextPostProcessor()
+        self.timeout_manager = FlexibleTimeoutManager()
+        self.model = None
     
-    all_segments = []
-    speaker_mapping = {}
-    next_speaker_id = 0
-    
-    logger.info("🔗 Mesclando 3 chunks com preservação de identidade...")
-    
-    # Processar cada chunk
-    for chunk_idx, (segments, chunk_start, chunk_end) in enumerate(chunk_results):
-        chunk_speakers = {}
-        chunk_name = f"Chunk {chunk_idx + 1}"
-        
-        logger.info(f"📝 Processando {chunk_name}: {len(segments)} segmentos")
-        
-        for segment in segments:
-            global_start = segment.start + chunk_start
-            global_end = segment.end + chunk_start
+    def load_model(self, model_size: str = "large-v2") -> whisper.Whisper:
+        if self.model is None:
+            logger.info(f"🤖 Carregando modelo Whisper: {model_size}")
             
-            if segment.speaker not in chunk_speakers:
-                if chunk_idx == 0:
-                    # Primeiro chunk - estabelecer baseline
-                    global_speaker = f"SPEAKER_{next_speaker_id:02d}"
-                    chunk_speakers[segment.speaker] = global_speaker
-                    next_speaker_id += 1
+            # Aplicar timeout no carregamento se configurado
+            if self.timeout_manager.mode != "none":
+                signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(600)  # 10 min para carregar
+                logger.info("⏰ Carregamento com timeout de 10min")
+            else:
+                logger.info("⏳ Carregamento SEM TIMEOUT")
+            
+            try:
+                self.model = whisper.load_model(model_size, device="cpu")
+                if self.timeout_manager.mode != "none":
+                    signal.alarm(0)
+                logger.info("✅ Modelo carregado com sucesso")
+                
+            except TimeoutException:
+                signal.alarm(0)
+                logger.warning("⏰ Timeout no carregamento - tentando modelo menor")
+                self.model = whisper.load_model("medium", device="cpu")
+                logger.info("✅ Modelo 'medium' carregado")
+            except Exception as e:
+                if self.timeout_manager.mode != "none":
+                    signal.alarm(0)
+                logger.error(f"❌ Erro ao carregar {model_size}: {e}")
+                self.model = whisper.load_model("medium", device="cpu")
+                logger.info("✅ Modelo 'medium' carregado como fallback")
+        
+        return self.model
+    
+    def transcribe_segment_flexible(self, model, seg_path: str, segment_duration_min: float) -> str:
+        """Transcrição com timeout flexível baseado na configuração"""
+        
+        # Calcular timeout para este segmento
+        timeout_min = self.timeout_manager.calculate_timeout(segment_duration_min)
+        use_timeout = self.timeout_manager.should_use_timeout(segment_duration_min)
+        
+        for attempt in range(3):
+            try:
+                if use_timeout:
+                    signal.signal(signal.SIGALRM, timeout_handler)
+                    signal.alarm(timeout_min * 60)
+                    logger.info(f"🎯 Tentativa {attempt + 1} com timeout de {timeout_min}min")
                 else:
-                    # Chunks 2 e 3 - análise de continuidade
-                    best_match = None
-                    best_score = 0
-                    
-                    # Procurar por continuidade temporal
-                    for existing_speaker in speaker_mapping.values():
-                        # Encontrar último segmento deste speaker
-                        last_end = 0
-                        for prev_seg in all_segments:
-                            if prev_seg.speaker == existing_speaker:
-                                last_end = max(last_end, prev_seg.end)
-                        
-                        time_gap = global_start - last_end
-                        
-                        # Score baseado em proximidade
-                        if time_gap < 180:  # 3 minutos de tolerância
-                            score = max(0, 1 - (time_gap / 180))
-                            if score > best_score:
-                                best_score = score
-                                best_match = existing_speaker
-                    
-                    if best_match and best_score > 0.3:
-                        chunk_speakers[segment.speaker] = best_match
-                        logger.info(f"🔗 Speaker {segment.speaker} mapeado para {best_match} (score: {best_score:.2f})")
-                    else:
-                        # Novo speaker
-                        global_speaker = f"SPEAKER_{next_speaker_id:02d}"
-                        chunk_speakers[segment.speaker] = global_speaker
-                        speaker_mapping[f"{chunk_idx}_{segment.speaker}"] = global_speaker
-                        next_speaker_id += 1
-                        logger.info(f"🆕 Novo speaker: {segment.speaker} → {global_speaker}")
-            
-            all_segments.append(DiarizationSegment(
-                global_start, global_end, chunk_speakers[segment.speaker]
-            ))
-    
-    # Ordenar por tempo
-    all_segments.sort(key=lambda x: x.start)
-    
-    # Mesclagem final preservando micro-pausas
-    if not all_segments:
-        return []
-    
-    merged = [all_segments[0]]
-    for segment in all_segments[1:]:
-        last = merged[-1]
-        if (last.speaker == segment.speaker and 
-            segment.start - last.end <= 3.0):  # 3s para pausas naturais
-            last.end = max(last.end, segment.end)
-        else:
-            merged.append(segment)
-    
-    speakers = set(seg.speaker for seg in merged)
-    logger.info(f"✅ Mesclagem de 3 chunks concluída: {len(merged)} segmentos, {len(speakers)} speakers")
-    
-    return merged
-
-def diarize_audio(audio_path: str) -> List[DiarizationSegment]:
-    """
-    🎯 DIARIZAÇÃO FIXA EM 3 CHUNKS - Máxima estabilidade e qualidade
-    """
-    hf_token = HF_TOKEN
-    if not hf_token:
-        raise ValueError("Token HuggingFace obrigatório!")
-    
-    # Inicializar gerenciador de recursos
-    resource_manager = ServerResourceManager()
-    
-    # Verificar recursos iniciais
-    resources = resource_manager.check_resources()
-    logger.info(f"🖥️ SERVIDOR: CPU {resources['cpu_percent']:.1f}%, RAM {resources['memory_percent']:.1f}% ({resources['memory_available_gb']:.1f}GB livre)")
-    
-    duration = get_audio_duration(audio_path)
-    logger.info(f"🎤 DIARIZAÇÃO 3-CHUNKS: Áudio de {duration/60:.1f} minutos")
-    
-    # Fallback apenas para áudios EXTREMAMENTE longos (>3 horas)
-    if duration > 10800:  # 3 horas
-        logger.warning("⚠️ Áudio extremamente longo - usando diarização inteligente")
-        return intelligent_fallback_diarization(audio_path, duration)
-    
-    try:
-        # Configurar PyTorch para qualidade máxima
-        resource_manager.configure_torch()
+                    logger.info(f"🎯 Tentativa {attempt + 1} SEM TIMEOUT")
+                
+                # Configuração baseada na tentativa
+                if attempt == 0:
+                    result = model.transcribe(
+                        seg_path,
+                        language="pt",
+                        task="transcribe",
+                        verbose=False,
+                        fp16=False,
+                        temperature=0.1,
+                        compression_ratio_threshold=1.8,
+                        logprob_threshold=-1.0,
+                        no_speech_threshold=0.2,
+                        initial_prompt="Transcrição em português brasileiro.",
+                        word_timestamps=True
+                    )
+                elif attempt == 1:
+                    result = model.transcribe(
+                        seg_path,
+                        language="pt",
+                        task="transcribe",
+                        verbose=False,
+                        fp16=False,
+                        temperature=0.2,
+                        no_speech_threshold=0.3
+                    )
+                else:
+                    result = model.transcribe(
+                        seg_path,
+                        language="pt",
+                        task="transcribe",
+                        verbose=False,
+                        fp16=False,
+                        temperature=0.3
+                    )
+                
+                if use_timeout:
+                    signal.alarm(0)
+                
+                transcription = result["text"].strip()
+                
+                if not is_invalid_transcription(transcription):
+                    logger.info(f"✅ Transcrição válida na tentativa {attempt + 1}")
+                    return transcription
+                else:
+                    logger.warning(f"❌ Transcrição inválida na tentativa {attempt + 1}")
+                
+            except TimeoutException:
+                signal.alarm(0)
+                logger.warning(f"⏰ Timeout na tentativa {attempt + 1}")
+                continue
+            except Exception as e:
+                if use_timeout:
+                    signal.alarm(0)
+                logger.warning(f"❌ Erro na tentativa {attempt + 1}: {e}")
+                continue
         
-        # Carregar pipeline
-        logger.info("🔧 Carregando pipeline otimizado para qualidade...")
-        start_time = time.time()
-        
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(600)  # 10 minutos para carregar
+        return ""
+    
+    def transcribe_audio(self, audio_path: str, output_dir: Optional[str] = None) -> str:
+        logger.info(f"🎯 Iniciando transcrição FLEXÍVEL: {audio_path}")
+        temp_files = []
         
         try:
-            pipeline = Pipeline.from_pretrained(
-                "pyannote/speaker-diarization-3.1",
-                use_auth_token=hf_token
-            )
+            if not os.path.exists(audio_path):
+                raise FileNotFoundError(f"Arquivo não encontrado: {audio_path}")
             
-            if torch.cuda.is_available():
-                logger.info("🚀 GPU detectada - usando aceleração")
-                pipeline = pipeline.to(torch.device("cuda"))
-            else:
-                logger.info(f"🖥️ CPU otimizada ({resource_manager.max_cpu_cores} cores)")
-                pipeline = pipeline.to(torch.device("cpu"))
+            # Pré-processar áudio
+            audio = AudioSegment.from_file(audio_path)
+            audio_duration = len(audio) / 1000.0
+            audio_duration_min = audio_duration / 60.0
             
-            signal.alarm(0)
+            logger.info(f"📊 Duração: {audio_duration_min:.1f} minutos")
             
-        except TimeoutException:
-            logger.error("❌ Timeout no carregamento do pipeline")
-            return intelligent_fallback_diarization(audio_path, duration)
-        
-        load_time = time.time() - start_time
-        logger.info(f"✅ Pipeline carregado em {load_time:.1f}s")
-        
-        # Processamento direto para áudios curtos (≤20 min)
-        if duration <= 1200:  # 20 minutos
-            logger.info("⚡ Processamento direto para áudio curto")
+            # Log configuração de timeout
+            self.timeout_manager.log_timeout_info(audio_duration_min)
             
+            # Para áudios muito longos, usar fallback direto
+            max_duration = 14400 if self.timeout_manager.mode == "none" else 7200  # 4h ou 2h
+            if audio_duration > max_duration:
+                logger.warning(f"⚠️ Áudio muito longo - usando fallback")
+                return create_fallback_transcription(audio_path)
+            
+            audio = self.audio_preprocessor.process(audio)
+            
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                audio.export(temp_file.name, format='wav')
+                temp_path = temp_file.name
+                temp_files.append(temp_path)
+            
+            # Tentar diarização
             try:
-                timeout_min = resource_manager.get_chunk_timeout(duration)
-                segments = diarize_chunk_optimized(pipeline, audio_path, "áudio completo", timeout_min)
-                speakers = set(seg.speaker for seg in segments)
-                logger.info(f"✅ PROCESSAMENTO DIRETO: {len(segments)} segmentos, {len(speakers)} speakers")
-                return segments
+                logger.info("🎯 Tentando diarização...")
                 
+                # Import dinâmico para usar a versão flexível
+                from diarization import diarize_audio, DiarizationSegment
+                diarization_segments = diarize_audio(temp_path)
+                
+                if diarization_segments:
+                    unique_speakers = set(seg.speaker for seg in diarization_segments)
+                    logger.info(f"✅ Diarização: {len(diarization_segments)} segmentos, {len(unique_speakers)} speakers")
+                    
+                    # Continuar com transcrição segmentada
+                    return self.transcribe_with_diarization(audio, diarization_segments, temp_files)
+                else:
+                    raise Exception("Nenhum segmento detectado")
+                    
             except Exception as e:
-                logger.error(f"Falha no processamento direto: {e}")
-                return intelligent_fallback_diarization(audio_path, duration)
-        
-        else:  # Processamento em 3 chunks
-            logger.info("🔪 Divisão em 3 chunks para áudio longo")
+                logger.warning(f"❌ Diarização falhou: {e} - usando fallback")
+                return create_fallback_transcription(audio_path)
             
-            chunks = split_audio_into_3_chunks(audio_path)
-            chunk_results = []
-            temp_files = []
+        except Exception as e:
+            logger.error(f"💥 Erro crítico: {e}")
+            return create_fallback_transcription(audio_path)
+        finally:
+            for temp_file in temp_files:
+                try:
+                    if os.path.exists(temp_file):
+                        os.unlink(temp_file)
+                except:
+                    pass
+    
+    def transcribe_with_diarization(self, audio: AudioSegment, segments: List, temp_files: List) -> str:
+        """Transcrição com diarização usando timeout flexível"""
+        try:
+            model = self.load_model("large-v2")
+            formatted_segments = []
+            valid_transcriptions = 0
+            total_segments = len(segments)
             
-            try:
-                for i, (chunk_path, start_time_chunk, end_time_chunk) in enumerate(chunks):
-                    temp_files.append(chunk_path)
+            logger.info(f"🚀 Transcrevendo {total_segments} segmentos com timeout {self.timeout_manager.mode.upper()}")
+            
+            for i, seg in enumerate(segments):
+                try:
+                    start_ms = max(0, int(seg.start * 1000))
+                    end_ms = min(len(audio), int(seg.end * 1000))
                     
-                    # Verificar recursos antes de cada chunk
-                    resources = resource_manager.check_resources()
-                    if resources['memory_percent'] > 85:
-                        logger.warning("🧹 RAM alta - limpando memória")
-                        gc.collect()
-                        time.sleep(2)
+                    if end_ms <= start_ms or (end_ms - start_ms) < 500:
+                        continue
                     
-                    chunk_duration = end_time_chunk - start_time_chunk
-                    timeout_min = resource_manager.get_chunk_timeout(chunk_duration)
-                    chunk_info = f"Chunk {i+1}/3"
+                    seg_audio = audio[start_ms:end_ms]
+                    seg_duration_min = len(seg_audio) / 1000.0 / 60.0
                     
-                    logger.info(f"🚀 Iniciando {chunk_info} (RAM: {resources['memory_percent']:.1f}%)")
+                    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as seg_file:
+                        seg_audio.export(seg_file.name, format='wav')
+                        seg_path = seg_file.name
+                        temp_files.append(seg_path)
                     
-                    # Processar chunk
-                    segments = diarize_chunk_optimized(pipeline, chunk_path, chunk_info, timeout_min)
-                    chunk_results.append((segments, start_time_chunk, end_time_chunk))
+                    # Transcrever com timeout flexível
+                    transcription_text = self.transcribe_segment_flexible(
+                        model, seg_path, seg_duration_min
+                    )
+                    
+                    if transcription_text.strip():
+                        processed_text = self.text_processor.clean_text(transcription_text)
+                        
+                        if processed_text.strip():
+                            timestamp = self.text_processor.format_timestamp(seg.start, seg.end)
+                            speaker_name = self.text_processor.format_speaker_name(seg.speaker)
+                            formatted_segments.append(f"{timestamp} {speaker_name}:\n{processed_text}")
+                            valid_transcriptions += 1
+                    
+                    logger.info(f"✅ Segmento {i+1}/{total_segments} concluído")
+                    
+                except Exception as e:
+                    logger.warning(f"❌ Erro no segmento {i+1}: {e}")
+                    continue
+            
+            if formatted_segments:
+                success_rate = valid_transcriptions / total_segments
+                result = "\n\n".join(formatted_segments)
+                logger.info(f"🎉 Transcrição concluída: {valid_transcriptions}/{total_segments} ({success_rate:.1%})")
+                return result
+            else:
+                raise Exception("Nenhum segmento transcrito")
                 
-                # Mesclar 3 chunks
-                final_segments = merge_3_chunks_advanced(chunk_results)
-                
-                speakers = set(seg.speaker for seg in final_segments)
-                logger.info(f"🎯 PROCESSAMENTO 3-CHUNKS CONCLUÍDO: {len(final_segments)} segmentos, {len(speakers)} speakers")
-                return final_segments
-                
-            finally:
-                # Limpeza de arquivos temporários
-                for temp_file in temp_files:
-                    try:
-                        if os.path.exists(temp_file):
-                            os.unlink(temp_file)
-                    except:
-                        pass
-                
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-        
-    except Exception as e:
-        logger.error(f"❌ Erro crítico: {e}")
-        return intelligent_fallback_diarization(audio_path, duration)
+        except Exception as e:
+            logger.error(f"❌ Erro na transcrição com diarização: {e}")
+            raise
 
-if __name__ == "__main__":
+def main():
     if len(sys.argv) < 2:
-        print("Uso: python diarization.py <audio_path>")
+        print(json.dumps({
+            "status": "error",
+            "error": "Por favor, forneça o caminho do arquivo de áudio"
+        }, ensure_ascii=False))
         sys.exit(1)
     
     audio_path = sys.argv[1]
+    output_dir = sys.argv[2] if len(sys.argv) > 2 else None
     
     try:
-        logger.info(f"🎯 Iniciando diarização FIXA-3-CHUNKS: {audio_path}")
-        segments = diarize_audio(audio_path)
+        processor = FlexibleTranscriptionProcessor()
+        result = processor.transcribe_audio(audio_path, output_dir)
         
-        # Output
-        for seg in segments:
-            print(seg.to_dict())
-            
+        if output_dir and result:
+            os.makedirs(output_dir, exist_ok=True)
+            output_file = os.path.join(output_dir, "transcricao.txt")
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(result)
+            logger.info(f"💾 Transcrição salva: {output_file}")
+        
+        output = {
+            "status": "success",
+            "text": result,
+            "language": "pt",
+            "processing_type": f"flexible_timeout_{TIMEOUT_MODE}",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        print(json.dumps(output, ensure_ascii=False))
+        
     except Exception as e:
-        logger.error(f"❌ Erro: {e}")
+        logger.error(f"💥 Erro na execução: {e}")
+        print(json.dumps({
+            "status": "error",
+            "error": str(e)
+        }, ensure_ascii=False))
         sys.exit(1)
+
+if __name__ == "__main__":
+    main()
