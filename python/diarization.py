@@ -184,7 +184,8 @@ def diarize_audio(audio_path: str) -> List[DiarizationSegment]:
         
         # Timeout muito mais generoso - 20 minutos para áudios longos
         signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(1200)  # 20 minutos
+        timeout_seconds = max(int(duration * 4), 3600)  # 4x duração do áudio, mínimo 1h
+        signal.alarm(timeout_seconds)  # 20 minutos
         
         start_time = time.time()
         
