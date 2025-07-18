@@ -8,12 +8,19 @@ import tempfile
 import os
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
+import warnings
+
+# Configurar variáveis de ambiente ANTES de importar torch
+os.environ['OMP_NUM_THREADS'] = '8'
+os.environ['TORCH_NUM_THREADS'] = '8'
+os.environ['MKL_NUM_THREADS'] = '8'
+os.environ['CUDA_VISIBLE_DEVICES'] = ''
+
 import torch
 import torchaudio
 import numpy as np
 from pyannote.audio import Pipeline
 from pyannote.core import Annotation, Segment
-import warnings
 
 # Suprimir warnings desnecessários
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -36,20 +43,32 @@ class AudioDiarizer:
         self._setup_torch_cpu()
         
     def _setup_torch_cpu(self):
-        """Configurar PyTorch para otimização em CPU"""
-        torch.set_num_threads(8)  # 8 vCPUs
-        torch.set_num_interop_threads(8)
+        """Configurar PyTorch para otimização em CPU - versão segura"""
+        try:
+            # Tentar configurar threads apenas se ainda não foi configurado
+            current_threads = torch.get_num_threads()
+            if current_threads != 8:
+                torch.set_num_threads(8)
+                logger.info(f"Threads configuradas: {current_threads} -> 8")
+        except Exception as e:
+            logger.warning(f"Não foi possível configurar threads: {e}")
         
-        # Desabilitar CUDA completamente
-        os.environ['CUDA_VISIBLE_DEVICES'] = ''
+        try:
+            # Tentar configurar interop threads apenas se possível
+            torch.set_num_interop_threads(8)
+        except Exception as e:
+            logger.warning(f"Não foi possível configurar interop threads: {e}")
         
         # Configurações para CPU
-        if hasattr(torch.backends, 'mkldnn'):
-            torch.backends.mkldnn.enabled = True
-        if hasattr(torch.backends, 'openmp'):
-            torch.backends.openmp.enabled = True
+        try:
+            if hasattr(torch.backends, 'mkldnn'):
+                torch.backends.mkldnn.enabled = True
+            if hasattr(torch.backends, 'openmp'):
+                torch.backends.openmp.enabled = True
+        except Exception as e:
+            logger.warning(f"Erro nas configurações de backend: {e}")
             
-        logger.info("PyTorch configurado para CPU com 8 threads")
+        logger.info("PyTorch configurado para CPU")
     
     def load_pipeline(self) -> Pipeline:
         """Carregar pipeline de diarização com configurações otimizadas"""

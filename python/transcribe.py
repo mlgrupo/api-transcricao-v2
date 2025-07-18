@@ -6,7 +6,6 @@ Otimizado para 8 vCPUs e 32GB RAM sem GPU
 import sys
 import json
 import logging
-import whisper
 import os
 import tempfile
 import multiprocessing as mp
@@ -16,6 +15,18 @@ from datetime import datetime
 import re
 import signal
 import time
+
+# Configurar variáveis de ambiente ANTES de importar torch/whisper
+os.environ['OMP_NUM_THREADS'] = '8'
+os.environ['TORCH_NUM_THREADS'] = '8'
+os.environ['MKL_NUM_THREADS'] = '8'
+os.environ['NUMEXPR_NUM_THREADS'] = '8'
+os.environ['OPENBLAS_NUM_THREADS'] = '8'
+os.environ['VECLIB_MAXIMUM_THREADS'] = '8'
+os.environ['NUMBA_NUM_THREADS'] = '8'
+os.environ['CUDA_VISIBLE_DEVICES'] = ''
+
+import whisper
 import torch
 from diarization import diarize_audio, DiarizationSegment
 
@@ -227,18 +238,23 @@ class OptimizedTranscriptionProcessor:
         self._setup_cpu_optimization()
     
     def _setup_cpu_optimization(self):
-        """Configurar otimizações para CPU"""
-        # Configurar PyTorch para CPU
-        torch.set_num_threads(8)  # 8 vCPUs
-        torch.set_num_interop_threads(8)
+        """Configurar otimizações para CPU - versão segura"""
+        try:
+            # Configurar PyTorch apenas se ainda não foi configurado
+            current_threads = torch.get_num_threads()
+            if current_threads != 8:
+                torch.set_num_threads(8)
+                logger.info(f"PyTorch threads: {current_threads} -> 8")
+        except Exception as e:
+            logger.warning(f"Erro ao configurar threads: {e}")
         
-        # Desabilitar CUDA
-        os.environ['CUDA_VISIBLE_DEVICES'] = ''
+        try:
+            # Tentar configurar interop threads apenas se possível
+            torch.set_num_interop_threads(8)
+        except Exception as e:
+            logger.warning(f"Erro ao configurar interop threads (normal se já inicializado): {e}")
         
-        # Configurar OpenMP para melhor performance
-        os.environ['OMP_NUM_THREADS'] = '8'
-        
-        logger.info("Configurações CPU otimizadas aplicadas")
+        logger.info("Configurações CPU aplicadas com segurança")
     
     def load_model(self, model_size: str = "large") -> whisper.Whisper:
         """Carregar modelo Whisper otimizado para CPU"""
