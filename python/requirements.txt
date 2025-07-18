@@ -1,55 +1,28 @@
-# Sistema de Transcrição com Diarização - Otimizado para CPU
-# Para servidor com 8 vCPUs e 32GB RAM (sem GPU)
-
-# PyTorch (versões específicas para CPU)
-torch==2.1.0
-torchaudio==2.1.0
-
-# Whisper e dependências principais
+# Dependências principais
 openai-whisper==20231117
 pydub==0.25.1
 numpy==1.24.3
-
-# SpeechBrain e processamento de áudio avançado
 speechbrain==0.5.16
+torch==2.1.0
+torchaudio==2.1.0
 pyannote.audio==3.1.0
+
+# Dependências do pydub
+ffmpeg-python==0.2.0
 soundfile==0.12.1
 librosa==0.10.1
 
-# Processamento de áudio adicional
-ffmpeg-python==0.2.0
+# Processamento de áudio
 noisereduce==3.0.0
 webrtcvad==2.0.10
 
-# HuggingFace ecosystem
-transformers==4.35.2
-datasets==2.14.6
-accelerate==0.24.1
-
-# Machine Learning
+# Utilitários
+python-dotenv==1.0.0
+requests==2.31.0
+ipywidgets==8.1.2
 scikit-learn==1.3.2
 
-# Utilidades
-requests==2.31.0
-python-dotenv==1.0.0
-ipywidgets==8.1.2
-
-# Dependências adicionais para análise e monitoramento
-psutil>=5.9.0
-matplotlib>=3.7.0
-pandas>=2.0.0
-scipy>=1.10.0
-
-# Monitoramento de performance (opcional)
-memory_profiler>=0.61.0
-
-# Dependências específicas do sistema (instalar via apt)
-# ffmpeg
-# libavcodec-extra  
-# sox
-# libsox-fmt-all
-# libasound2-dev
-# portaudio19-dev
-# libsndfile1-dev
-# python3-dev
-# build-essential
+# HuggingFace
+transformers==4.35.2
+datasets==2.14.6
+accelerate==0.24.1 

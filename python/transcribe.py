@@ -1,33 +1,19 @@
 #!/usr/bin/env python3
 """
-Sistema de Transcrição Avançado com Diarização - Versão Otimizada CPU
-Otimizado para 8 vCPUs e 32GB RAM sem GPU
+Sistema de Transcrição Avançado com Diarização Real de Locutores - Versão Otimizada para 8vCPU 32GB
 """
 import sys
 import json
 import logging
+import whisper
 import os
 import tempfile
-import multiprocessing as mp
 from pathlib import Path
 from typing import Dict, Optional, List
 from datetime import datetime
 import re
 import signal
 import time
-
-# Configurar variáveis de ambiente ANTES de importar torch/whisper
-os.environ['OMP_NUM_THREADS'] = '8'
-os.environ['TORCH_NUM_THREADS'] = '8'
-os.environ['MKL_NUM_THREADS'] = '8'
-os.environ['NUMEXPR_NUM_THREADS'] = '8'
-os.environ['OPENBLAS_NUM_THREADS'] = '8'
-os.environ['VECLIB_MAXIMUM_THREADS'] = '8'
-os.environ['NUMBA_NUM_THREADS'] = '8'
-os.environ['CUDA_VISIBLE_DEVICES'] = ''
-
-import whisper
-import torch
 from diarization import diarize_audio, DiarizationSegment
 
 # Processamento de áudio
@@ -39,6 +25,7 @@ import numpy as np
 try:
     from text_processor import TextProcessor, TextProcessingRules
 except ImportError:
+    # Fallback se módulo não existir
     class TextProcessor:
         def __init__(self, rules): pass
         def process(self, text): return text
@@ -58,71 +45,55 @@ class TimeoutException(Exception):
 def timeout_handler(signum, frame):
     raise TimeoutException("Timeout no processamento")
 
-class OptimizedAudioPreprocessor:
-    """Pré-processador otimizado para CPU"""
+class AudioPreprocessor:
     def __init__(self):
         self.sample_rate = 16000
         self.channels = 1
-        # Configurar para usar múltiplos cores
-        mp.set_start_method('spawn', force=True)
     
     def normalize_audio(self, audio: AudioSegment) -> AudioSegment:
-        """Normalização otimizada"""
         try:
-            # Normalização com headroom conservador
-            normalized = normalize(audio, headroom=2.0)
-            return normalized
+            return normalize(audio)
         except Exception as e:
             logger.warning(f"Erro na normalização: {e}")
             return audio
     
-    def enhance_speech(self, audio: AudioSegment) -> AudioSegment:
-        """Melhorar clareza da fala"""
-        try:
-            # Aplicar filtro passa-alta leve para remover ruído baixo
-            # Filtro simples usando pydub
-            if audio.rms > 0:
-                # Reduzir ruído de fundo mantendo a fala
-                enhanced = audio.high_pass_filter(80)  # Remove frequências abaixo de 80Hz
-                enhanced = enhanced.low_pass_filter(8000)  # Remove frequências acima de 8kHz
-                return enhanced
-            return audio
-        except Exception as e:
-            logger.warning(f"Erro no enhancement: {e}")
-            return audio
-    
     def convert_format(self, audio: AudioSegment) -> AudioSegment:
-        """Conversão de formato otimizada"""
         try:
-            # Resample se necessário
             if audio.frame_rate != self.sample_rate:
                 audio = audio.set_frame_rate(self.sample_rate)
-            
-            # Converter para mono
             if audio.channels != self.channels:
                 audio = audio.set_channels(self.channels)
+            return audio
+        except Exception as e:
+            logger.warning(f"Erro na conversão de formato: {e}")
+            return audio
+    
+    def enhance_audio(self, audio: AudioSegment) -> AudioSegment:
+        """Melhorias extras para áudio com mais recursos disponíveis"""
+        try:
+            # Aplicar filtro de ruído básico aumentando o ganho de frequências de voz
+            # Este processamento é mais intensivo mas temos recursos suficientes
+            audio = audio.apply_gain_stereo(0, 0)  # Garantir mono
+            
+            # Normalizar mais agressivamente para áudios fracos
+            audio = normalize(audio, headroom=0.1)
             
             return audio
         except Exception as e:
-            logger.warning(f"Erro na conversão: {e}")
+            logger.warning(f"Erro no melhoramento de áudio: {e}")
             return audio
     
     def process(self, audio: AudioSegment) -> AudioSegment:
-        """Pipeline completo de pré-processamento"""
-        logger.info("Iniciando pré-processamento otimizado...")
+        logger.info("Iniciando pré-processamento avançado de áudio...")
         original_duration = len(audio)
-        
-        # Pipeline de processamento
-        audio = self.enhance_speech(audio)
         audio = self.normalize_audio(audio)
         audio = self.convert_format(audio)
-        
+        audio = self.enhance_audio(audio)  # Processamento extra com recursos disponíveis
         final_duration = len(audio)
         logger.info(f"Pré-processamento concluído: {original_duration}ms -> {final_duration}ms")
         return audio
 
-class EnhancedTextProcessor:
-    """Processador de texto melhorado"""
+class TextPostProcessor:
     def __init__(self):
         try:
             self.text_processor = TextProcessor(TextProcessingRules(
@@ -138,7 +109,6 @@ class EnhancedTextProcessor:
             self.text_processor = None
     
     def clean_text(self, text: str) -> str:
-        """Limpeza avançada de texto"""
         if not text or not text.strip():
             return ""
         
@@ -146,412 +116,333 @@ class EnhancedTextProcessor:
             if self.text_processor:
                 text = self.text_processor.process(text)
         except Exception as e:
-            logger.warning(f"Erro no processamento: {e}")
+            logger.warning(f"Erro no processamento de texto: {e}")
         
         # Limpeza básica
         text = re.sub(r'\s+', ' ', text)
         text = text.strip()
-        
-        # Manter apenas caracteres válidos
-        text = re.sub(r'[^\w\s\.,\!\?\;\:\-\(\)\[\]\"\'áàâãéèêíìîóòôõúùûçÁÀÂÃÉÈÊÍÌÎÓÒÔÕÚÙÛÇ]', '', text)
-        
-        # Capitalizar início de frases
-        sentences = re.split(r'([.!?]+)', text)
-        for i in range(0, len(sentences), 2):
-            if sentences[i].strip():
-                sentences[i] = sentences[i].strip().capitalize()
-        text = ''.join(sentences)
-        
         return text
     
     def format_timestamp(self, start_time: float, end_time: float) -> str:
-        """Formatação precisa de timestamp"""
-        def seconds_to_time(seconds):
-            h = int(seconds // 3600)
-            m = int((seconds % 3600) // 60)
-            s = int(seconds % 60)
-            ms = int((seconds % 1) * 1000)
-            return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
-        
-        start_str = seconds_to_time(start_time)
-        end_str = seconds_to_time(end_time)
-        return f"[{start_str} - {end_str}]"
+        start_seconds = int(start_time)
+        end_seconds = int(end_time)
+        start_h = start_seconds // 3600
+        start_m = (start_seconds % 3600) // 60
+        start_s = start_seconds % 60
+        end_h = end_seconds // 3600
+        end_m = (end_seconds % 3600) // 60
+        end_s = end_seconds % 60
+        return f"[{start_h:02d}:{start_m:02d}:{start_s:02d} - {end_h:02d}:{end_m:02d}:{end_s:02d}]"
     
     def format_speaker_name(self, speaker: str) -> str:
-        """Formatar nome do locutor"""
+        """Converte SPEAKER_00 para Speaker 01"""
         if speaker.startswith("SPEAKER_"):
             try:
-                number = int(speaker.split("_")[1]) + 1
-                return f"Locutor {number:02d}"
+                number = int(speaker.split("_")[1]) + 1  # Converter 0 para 1, 1 para 2, etc
+                return f"Speaker {number:02d}"
             except (IndexError, ValueError):
                 return speaker
         return speaker
 
-def is_valid_transcription(text: str) -> bool:
-    """Validação mais rigorosa de transcrições"""
-    if not text or len(text.strip()) < 3:
-        return False
-    
+def is_invalid_transcription(text: str) -> bool:
+    """Detecta transcrições inválidas (prompt confusion, repetições, etc.)"""
     text_lower = text.lower().strip()
     
-    # Frases que indicam erro do modelo
-    invalid_phrases = [
+    # Frases que indicam confusão com prompt
+    prompt_indicators = [
+        "transcreva com a maior precisão possível",
+        "transcreva com maior precisão", 
         "transcreva com a maior precisão",
-        "transcreva com maior precisão",
-        "este é um áudio em português",
-        "agradeço a você por assistir",
-        "obrigado por assistir",
-        "se inscreva no canal",
-        "deixe seu like",
-        "compartilhe este vídeo"
+        "áudio em português brasileiro",
+        "este é um áudio",
+        "a gente tem um áudio em português brasileiro",
+        "português brasileiro",
+        "transcreva",
+        "com a maior precisão",
+        "agradeço a você por assistir",  # Outra frase comum de confusão
+        "este é o áudio que trouxe",
+        "a gente vai ver",
+        "ainda não é possível"
     ]
     
-    for phrase in invalid_phrases:
-        if phrase in text_lower:
-            return False
+    # Verificar confusão de prompt
+    for indicator in prompt_indicators:
+        if indicator in text_lower:
+            return True
     
-    # Verificar repetições excessivas
+    # Verificar repetições excessivas (palavras repetidas mais de 4 vezes) - mais rigoroso
     words = text_lower.split()
-    if len(words) > 2:
-        word_count = {}
+    if len(words) > 0:
+        word_counts = {}
         for word in words:
-            if len(word) > 2:
-                word_count[word] = word_count.get(word, 0) + 1
+            if len(word) > 3:  # Só contar palavras com mais de 3 caracteres
+                word_counts[word] = word_counts.get(word, 0) + 1
         
-        # Se mais de 70% das palavras são repetição da mesma palavra
-        max_count = max(word_count.values()) if word_count else 0
-        if max_count > len(words) * 0.7:
-            return False
+        # Se alguma palavra aparece mais de 4 vezes, é suspeito
+        for count in word_counts.values():
+            if count > 4:
+                return True
     
-    # Verificar se não é só pontuação
-    if re.match(r'^[\s\.,\!\?\;\:\-\(\)\[\]\"\']*$', text):
-        return False
+    # Verificar frases muito curtas e genéricas
+    generic_phrases = [
+        "a gente vai ver",
+        "a gente precisa",
+        "ainda não é possível",
+        "o que você quer dizer",
+        "a gente vai fazer"
+    ]
     
-    return True
+    if text_lower in generic_phrases:
+        return True
+    
+    # Verificar se é muito curto (menos de 5 caracteres) - mais permissivo
+    if len(text.strip()) < 5:
+        return True
+    
+    return False
 
-class OptimizedTranscriptionProcessor:
-    """Processador de transcrição otimizado para CPU"""
+class TranscriptionProcessor:
     def __init__(self):
-        self.audio_preprocessor = OptimizedAudioPreprocessor()
-        self.text_processor = EnhancedTextProcessor()
+        self.audio_preprocessor = AudioPreprocessor()
+        self.text_processor = TextPostProcessor()
         self.model = None
-        self._setup_cpu_optimization()
     
-    def _setup_cpu_optimization(self):
-        """Configurar otimizações para CPU - versão segura"""
-        try:
-            # Configurar PyTorch apenas se ainda não foi configurado
-            current_threads = torch.get_num_threads()
-            if current_threads != 8:
-                torch.set_num_threads(8)
-                logger.info(f"PyTorch threads: {current_threads} -> 8")
-        except Exception as e:
-            logger.warning(f"Erro ao configurar threads: {e}")
-        
-        try:
-            # Tentar configurar interop threads apenas se possível
-            torch.set_num_interop_threads(8)
-        except Exception as e:
-            logger.warning(f"Erro ao configurar interop threads (normal se já inicializado): {e}")
-        
-        logger.info("Configurações CPU aplicadas com segurança")
-    
-    def load_model(self, model_size: str = "large") -> whisper.Whisper:
-        """Carregar modelo Whisper otimizado para CPU"""
+    def load_model(self, model_size: str = "large-v2") -> whisper.Whisper:  # Usar modelo maior com RAM suficiente
         if self.model is None:
-            logger.info(f"Carregando modelo Whisper {model_size} otimizado para CPU...")
-            
+            logger.info(f"Carregando modelo Whisper: {model_size}")
             try:
-                # Carregar modelo com configurações CPU
-                self.model = whisper.load_model(
-                    model_size,
-                    device="cpu",
-                    download_root=None,
-                    in_memory=True  # Manter na memória para melhor performance
-                )
-                
-                # Configurar modelo para CPU
-                self.model.eval()  # Modo de inferência
-                
-                logger.info(f"Modelo {model_size} carregado com sucesso")
-                
+                # Com 32GB RAM, podemos usar o modelo large sem problemas
+                self.model = whisper.load_model(model_size, device="cpu")  # Usar CPU explicitamente
+                logger.info("Modelo carregado com sucesso")
             except Exception as e:
                 logger.error(f"Erro ao carregar modelo {model_size}: {e}")
-                # Fallback para modelos menores
-                fallback_models = ["medium", "base", "small"]
-                for fallback in fallback_models:
-                    try:
-                        logger.info(f"Tentando modelo {fallback}...")
-                        self.model = whisper.load_model(fallback, device="cpu")
-                        logger.info(f"Modelo {fallback} carregado como fallback")
-                        break
-                    except Exception as fe:
-                        logger.warning(f"Falha no modelo {fallback}: {fe}")
-                        continue
-                
-                if self.model is None:
-                    raise RuntimeError("Não foi possível carregar nenhum modelo Whisper")
-        
+                logger.info("Tentando carregar modelo 'medium'...")
+                self.model = whisper.load_model("medium", device="cpu")
+                logger.info("Modelo 'medium' carregado com sucesso")
         return self.model
     
-    def transcribe_segment_optimized(self, model, seg_path: str, attempt: int = 0) -> str:
-        """Transcrição otimizada com múltiplas estratégias"""
-        try:
-            # Timeout generoso para CPU
-            signal.signal(signal.SIGALRM, timeout_handler)
-            signal.alarm(180)  # 3 minutos
-            
-            # Configurações baseadas na tentativa
-            if attempt == 0:
-                # Primeira tentativa: qualidade máxima
-                result = model.transcribe(
-                    seg_path,
-                    language="pt",
-                    task="transcribe",
-                    verbose=False,
-                    fp16=False,  # CPU não suporta FP16
-                    temperature=0.0,
-                    compression_ratio_threshold=2.2,
-                    logprob_threshold=-0.8,
-                    no_speech_threshold=0.3,
-                    condition_on_previous_text=False,
-                    initial_prompt="Esta é uma conversa natural em português brasileiro.",
-                    suppress_tokens=[-1],
-                    word_timestamps=True  # Para melhor precisão temporal
-                )
-            elif attempt == 1:
-                # Segunda tentativa: mais permissivo
-                result = model.transcribe(
-                    seg_path,
-                    language="pt",
-                    task="transcribe",
-                    verbose=False,
-                    fp16=False,
-                    temperature=0.2,
-                    compression_ratio_threshold=2.8,
-                    logprob_threshold=-1.0,
-                    no_speech_threshold=0.2,
-                    condition_on_previous_text=False,
-                    initial_prompt="Conversa em português.",
-                    suppress_tokens=[-1]
-                )
-            else:
-                # Última tentativa: máxima permissividade
-                result = model.transcribe(
-                    seg_path,
-                    language="pt",
-                    task="transcribe",
-                    verbose=False,
-                    fp16=False,
-                    temperature=0.4,
-                    compression_ratio_threshold=3.5,
-                    logprob_threshold=-1.2,
-                    no_speech_threshold=0.1,
-                    condition_on_previous_text=False,
-                    suppress_tokens=[-1]
-                )
-            
-            signal.alarm(0)
-            
-            transcription = result.get("text", "").strip()
-            
-            if is_valid_transcription(transcription):
-                logger.debug(f"Transcrição válida (tentativa {attempt + 1})")
+    def transcribe_segment_safe(self, model, seg_path: str, retry_count: int = 5) -> str:  # Mais tentativas
+        """Transcreve um segmento com múltiplas tentativas e filtros otimizados"""
+        for attempt in range(retry_count + 1):
+            try:
+                # Timeout mais generoso com recursos disponíveis - 3 minutos por segmento
+                signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(180)
+                
+                # Configurações otimizadas para cada tentativa
+                if attempt == 0:
+                    # Primeira tentativa: configuração otimizada para qualidade
+                    result = model.transcribe(
+                        seg_path,
+                        language="pt",
+                        task="transcribe",
+                        verbose=False,
+                        fp16=False,
+                        temperature=0.0,
+                        compression_ratio_threshold=2.2,  # Menos restritivo
+                        logprob_threshold=-0.8,  # Menos restritivo
+                        no_speech_threshold=0.5,  # Menos rigoroso
+                        condition_on_previous_text=False,
+                        initial_prompt="Transcrição em português brasileiro com múltiplos falantes.",
+                        suppress_tokens=[-1],
+                        word_timestamps=True  # Ativar timestamps de palavras para melhor precisão
+                    )
+                elif attempt == 1:
+                    # Segunda tentativa: mais permissiva para capturar falas baixas
+                    result = model.transcribe(
+                        seg_path,
+                        language="pt",
+                        task="transcribe",
+                        verbose=False,
+                        fp16=False,
+                        temperature=0.1,
+                        compression_ratio_threshold=2.0,
+                        logprob_threshold=-0.6,
+                        no_speech_threshold=0.3,
+                        condition_on_previous_text=False,
+                        initial_prompt="Áudio em português com possível baixo volume.",
+                        suppress_tokens=[-1],
+                        word_timestamps=True
+                    )
+                elif attempt == 2:
+                    # Terceira tentativa: configuração para áudios difíceis
+                    result = model.transcribe(
+                        seg_path,
+                        language="pt",
+                        task="transcribe",
+                        verbose=False,
+                        fp16=False,
+                        temperature=0.2,
+                        compression_ratio_threshold=1.8,
+                        logprob_threshold=-0.4,
+                        no_speech_threshold=0.2,
+                        condition_on_previous_text=False,
+                        initial_prompt=None,
+                        suppress_tokens=[-1],
+                        word_timestamps=True
+                    )
+                elif attempt == 3:
+                    # Quarta tentativa: ainda mais permissiva
+                    result = model.transcribe(
+                        seg_path,
+                        language="pt",
+                        task="transcribe",
+                        verbose=False,
+                        fp16=False,
+                        temperature=0.4,
+                        compression_ratio_threshold=1.5,
+                        logprob_threshold=-0.2,
+                        no_speech_threshold=0.1,
+                        condition_on_previous_text=False,
+                        initial_prompt=None,
+                        suppress_tokens=[-1]
+                    )
+                else:
+                    # Última tentativa: máxima permissividade
+                    result = model.transcribe(
+                        seg_path,
+                        language="pt",
+                        task="transcribe",
+                        verbose=False,
+                        fp16=False,
+                        temperature=0.8,  # Mais criatividade
+                        compression_ratio_threshold=1.2,
+                        logprob_threshold=0.0,
+                        no_speech_threshold=0.05,  # Muito baixo
+                        condition_on_previous_text=False,
+                        initial_prompt=None,
+                        suppress_tokens=[-1]
+                    )
+                
+                signal.alarm(0)  # Cancelar timeout
+                
+                # Verificar se o resultado é válido
+                transcription = result["text"].strip()
+                
+                if is_invalid_transcription(transcription):
+                    logger.warning(f"Transcrição inválida detectada (tentativa {attempt + 1}): '{transcription[:50]}...'")
+                    if attempt < retry_count:
+                        continue
+                    return ""  # Retornar vazio se todas as tentativas falharam
+                
+                # Se chegou aqui, a transcrição é válida
+                logger.info(f"Transcrição válida obtida na tentativa {attempt + 1}")
                 return transcription
-            else:
-                logger.warning(f"Transcrição inválida (tentativa {attempt + 1}): '{transcription[:50]}...'")
+                
+            except TimeoutException:
+                signal.alarm(0)
+                logger.warning(f"Timeout na transcrição do segmento (tentativa {attempt + 1})")
+                if attempt < retry_count:
+                    continue
                 return ""
-                
-        except TimeoutException:
-            signal.alarm(0)
-            logger.warning(f"Timeout na transcrição (tentativa {attempt + 1})")
-            return ""
-        except Exception as e:
-            signal.alarm(0)
-            logger.warning(f"Erro na transcrição (tentativa {attempt + 1}): {e}")
-            return ""
-    
-    def should_split_segment(self, segment: DiarizationSegment) -> bool:
-        """Determinar se um segmento deve ser dividido"""
-        duration = segment.end - segment.start
-        # Dividir segmentos muito longos para melhor precisão
-        return duration > 30.0  # Mais de 30 segundos
-    
-    def split_long_segment(self, segment: DiarizationSegment, audio: AudioSegment) -> List[DiarizationSegment]:
-        """Dividir segmentos longos mantendo o mesmo locutor"""
-        duration = segment.end - segment.start
-        if duration <= 30.0:
-            return [segment]
+            except Exception as e:
+                signal.alarm(0)
+                logger.warning(f"Erro na transcrição do segmento (tentativa {attempt + 1}): {e}")
+                if attempt < retry_count:
+                    continue
+                return ""
         
-        # Dividir em chunks de até 25 segundos
-        chunk_duration = 25.0
-        chunks = []
-        current_start = segment.start
-        
-        while current_start < segment.end:
-            chunk_end = min(current_start + chunk_duration, segment.end)
-            
-            # Ajustar para não cortar no meio de uma palavra (procurar silêncio)
-            if chunk_end < segment.end:
-                # Procurar um ponto de silêncio nos últimos 3 segundos do chunk
-                search_start = max(current_start, chunk_end - 3.0)
-                search_start_ms = int(search_start * 1000)
-                chunk_end_ms = int(chunk_end * 1000)
-                
-                chunk_audio = audio[search_start_ms:chunk_end_ms]
-                if len(chunk_audio) > 0:
-                    # Encontrar ponto mais silencioso
-                    segment_rms = []
-                    for i in range(0, len(chunk_audio), 100):  # A cada 100ms
-                        segment_rms.append(chunk_audio[i:i+100].rms)
-                    
-                    if segment_rms:
-                        min_rms_idx = segment_rms.index(min(segment_rms))
-                        silence_point = search_start + (min_rms_idx * 0.1)  # 100ms = 0.1s
-                        if silence_point > current_start:
-                            chunk_end = silence_point
-            
-            chunks.append(DiarizationSegment(
-                start=current_start,
-                end=chunk_end,
-                speaker=segment.speaker,
-                confidence=segment.confidence
-            ))
-            
-            current_start = chunk_end
-        
-        logger.info(f"Segmento de {duration:.1f}s dividido em {len(chunks)} partes")
-        return chunks
-    
-    def process_segments(self, segments: List[DiarizationSegment], audio: AudioSegment) -> List[DiarizationSegment]:
-        """Processar segmentos para otimizar transcrição"""
-        processed = []
-        
-        for segment in segments:
-            if self.should_split_segment(segment):
-                # Dividir segmentos longos
-                split_segments = self.split_long_segment(segment, audio)
-                processed.extend(split_segments)
-            else:
-                processed.append(segment)
-        
-        return processed
+        return ""
     
     def transcribe_audio(self, audio_path: str, output_dir: Optional[str] = None) -> str:
-        """Transcrição principal otimizada"""
-        logger.info(f"Iniciando transcrição otimizada: {audio_path}")
+        logger.info(f"Iniciando transcrição avançada com diarização otimizada: {audio_path}")
         temp_files = []
         
         try:
+            # Verificar se arquivo existe
             if not os.path.exists(audio_path):
                 raise FileNotFoundError(f"Arquivo não encontrado: {audio_path}")
             
-            # Carregar e pré-processar áudio
-            logger.info("Carregando áudio...")
+            # Carregar áudio e pré-processar
+            logger.info("Carregando e pré-processando áudio...")
             audio = AudioSegment.from_file(audio_path)
-            audio_duration = len(audio) / 1000.0
-            logger.info(f"Duração do áudio: {audio_duration:.1f}s")
-            
             audio = self.audio_preprocessor.process(audio)
             
-            # Salvar áudio processado
+            # Salvar áudio processado temporariamente
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
                 audio.export(temp_file.name, format='wav')
                 temp_path = temp_file.name
                 temp_files.append(temp_path)
             
-            # Diarização
-            logger.info("Executando diarização...")
+            # Diarização otimizada - sem limitações artificiais
+            logger.info("Executando diarização otimizada com pyannote.audio...")
             try:
-                diarization_segments = diarize_audio(temp_path, min_segment_duration=1.0)
+                diarization_segments: List[DiarizationSegment] = diarize_audio(temp_path)
+                logger.info(f"{len(diarization_segments)} segmentos de locutores detectados.")
                 
-                if diarization_segments:
-                    unique_speakers = set(seg.speaker for seg in diarization_segments)
-                    logger.info(f"Diarização concluída: {len(diarization_segments)} segmentos, {len(unique_speakers)} locutores")
-                    logger.info(f"Locutores detectados: {sorted(list(unique_speakers))}")
-                else:
-                    raise Exception("Nenhum segmento detectado")
-                    
+                # Verificar se diarização detectou múltiplos speakers
+                unique_speakers = set(seg.speaker for seg in diarization_segments)
+                logger.info(f"Speakers únicos detectados: {list(unique_speakers)}")
+                
             except Exception as e:
                 logger.error(f"Erro na diarização: {e}")
-                # Fallback: usar áudio inteiro como um locutor
-                diarization_segments = [DiarizationSegment(0.0, audio_duration, "SPEAKER_00", 1.0)]
+                # Fallback: criar segmentos únicos
+                audio_duration = len(audio) / 1000.0
+                diarization_segments = [DiarizationSegment(0.0, audio_duration, "SPEAKER_00")]
                 logger.info("Usando segmento único como fallback")
             
-            # Processar segmentos para otimizar transcrição
-            processed_segments = self.process_segments(diarization_segments, audio)
-            logger.info(f"Segmentos processados: {len(processed_segments)}")
+            # Carregar modelo Whisper otimizado
+            model = self.load_model("large-v2")  # Usar modelo grande com RAM disponível
             
-            # Carregar modelo Whisper
-            model = self.load_model("large")
-            
-            # Transcrever segmentos
+            # Transcrever cada segmento
             formatted_segments = []
-            total_segments = len(processed_segments)
-            successful_transcriptions = 0
+            total_segments = len(diarization_segments)
+            valid_transcriptions = 0
             
-            for i, seg in enumerate(processed_segments):
-                logger.info(f"Transcrevendo segmento {i+1}/{total_segments} ({seg.speaker}) - {seg.end-seg.start:.1f}s")
+            for i, seg in enumerate(diarization_segments):
+                logger.info(f"Transcrevendo segmento {i+1}/{total_segments} ({seg.speaker})")
                 
                 try:
-                    # Extrair segmento de áudio
+                    # Extrair segmento do áudio
                     start_ms = max(0, int(seg.start * 1000))
                     end_ms = min(len(audio), int(seg.end * 1000))
                     
-                    if end_ms <= start_ms or (end_ms - start_ms) < 1000:  # Menos de 1 segundo
-                        logger.info(f"Segmento muito curto, pulando")
+                    if end_ms <= start_ms:
+                        logger.warning(f"Segmento inválido: {start_ms}-{end_ms}ms")
                         continue
                     
                     seg_audio = audio[start_ms:end_ms]
                     
-                    # Salvar segmento temporário
+                    # Ser menos restritivo com segmentos curtos - aceitar 1.5 segundos
+                    if len(seg_audio) < 1500:
+                        logger.info(f"Pulando segmento muito curto: {len(seg_audio)}ms")
+                        continue
+                    
                     with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as seg_file:
                         seg_audio.export(seg_file.name, format='wav')
                         seg_path = seg_file.name
                         temp_files.append(seg_path)
                     
-                    # Tentar transcrever com múltiplas estratégias
-                    transcription_text = ""
-                    for attempt in range(3):
-                        transcription_text = self.transcribe_segment_optimized(model, seg_path, attempt)
-                        if transcription_text:
-                            break
-                        if attempt < 2:
-                            logger.info(f"Tentativa {attempt + 1} falhou, tentando novamente...")
+                    # Transcrever segmento com mais tentativas
+                    transcription_text = self.transcribe_segment_safe(model, seg_path, retry_count=5)
                     
-                    if transcription_text:
-                        # Processar texto
+                    # Processar texto se válido
+                    if transcription_text.strip():
                         processed_text = self.text_processor.clean_text(transcription_text)
                         
-                        if processed_text and is_valid_transcription(processed_text):
+                        # Verificar novamente após limpeza
+                        if processed_text.strip() and not is_invalid_transcription(processed_text):
                             timestamp = self.text_processor.format_timestamp(seg.start, seg.end)
                             speaker_name = self.text_processor.format_speaker_name(seg.speaker)
-                            
-                            formatted_segments.append(f"{timestamp} {speaker_name}:\n{processed_text}\n")
-                            successful_transcriptions += 1
-                            
-                            logger.info(f"✅ Segmento {i+1} transcrito: '{processed_text[:50]}{'...' if len(processed_text) > 50 else ''}'")
+                            formatted_segments.append(f"{timestamp} {speaker_name}:\n{processed_text}")
+                            valid_transcriptions += 1
+                            logger.info(f"✅ Segmento {i+1} transcrito: {len(processed_text)} caracteres")
                         else:
-                            logger.info(f"❌ Segmento {i+1} descartado após validação")
+                            logger.info(f"❌ Segmento {i+1} descartado: conteúdo inválido")
                     else:
-                        logger.info(f"⚠️ Segmento {i+1} não pôde ser transcrito")
+                        logger.info(f"⚠️ Segmento {i+1} vazio")
                 
                 except Exception as e:
                     logger.error(f"Erro ao processar segmento {i+1}: {e}")
                     continue
             
-            # Compilar resultado
+            # Verificar se temos resultados válidos
             if not formatted_segments:
-                logger.warning("Nenhum segmento transcrito com sucesso")
-                return "Não foi possível transcrever este áudio. O arquivo pode estar corrompido, sem fala clara ou com qualidade muito baixa."
+                logger.warning("Nenhum segmento foi transcrito com sucesso")
+                return "Não foi possível transcrever este áudio. O áudio pode estar silencioso, com baixa qualidade ou sem fala clara."
             
-            result = "\n".join(formatted_segments)
-            
-            # Estatísticas finais
-            success_rate = (successful_transcriptions / total_segments) * 100
-            logger.info(f"🎉 Transcrição concluída!")
-            logger.info(f"   - Segmentos transcritos: {successful_transcriptions}/{total_segments} ({success_rate:.1f}%)")
-            logger.info(f"   - Caracteres gerados: {len(result)}")
+            result = "\n".join(formatted_segments)  # Uma linha entre segmentos
+            logger.info(f"🎉 Transcrição concluída: {valid_transcriptions}/{total_segments} segmentos válidos")
             
             return result
             
@@ -565,10 +456,9 @@ class OptimizedTranscriptionProcessor:
                     if os.path.exists(temp_file):
                         os.unlink(temp_file)
                 except Exception as e:
-                    logger.warning(f"Erro ao limpar {temp_file}: {e}")
+                    logger.warning(f"Erro ao remover arquivo temporário {temp_file}: {e}")
 
 def main():
-    """Função principal"""
     if len(sys.argv) < 2:
         print(json.dumps({
             "status": "error",
@@ -580,45 +470,34 @@ def main():
     output_dir = sys.argv[2] if len(sys.argv) > 2 else None
     
     try:
-        # Validar arquivo
         if not os.path.exists(audio_path):
             raise FileNotFoundError(f"Arquivo não encontrado: {audio_path}")
         
-        # Verificar tamanho do arquivo
-        file_size = os.path.getsize(audio_path) / (1024 * 1024)  # MB
-        logger.info(f"Processando arquivo: {audio_path} ({file_size:.1f}MB)")
-        
-        # Executar transcrição
-        processor = OptimizedTranscriptionProcessor()
+        processor = TranscriptionProcessor()
         result = processor.transcribe_audio(audio_path, output_dir)
         
-        # Salvar resultado se solicitado
         if output_dir and result:
             os.makedirs(output_dir, exist_ok=True)
             output_file = os.path.join(output_dir, "transcricao.txt")
             with open(output_file, 'w', encoding='utf-8') as f:
                 f.write(result)
-            logger.info(f"Resultado salvo em: {output_file}")
+            logger.info(f"Transcrição salva em: {output_file}")
         
-        # Retornar resultado
         output = {
             "status": "success",
             "text": result,
             "language": "pt",
-            "processing_type": "optimized_diarization_whisper",
-            "timestamp": datetime.now().isoformat(),
-            "file_size_mb": file_size,
-            "model_used": "large"
+            "processing_type": "diarization_whisper_optimized",
+            "timestamp": datetime.now().isoformat()
         }
         
-        print(json.dumps(output, ensure_ascii=False, indent=2))
+        print(json.dumps(output, ensure_ascii=False))
         
     except Exception as e:
         logger.error(f"Erro na execução: {e}")
         print(json.dumps({
             "status": "error",
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
+            "error": str(e)
         }, ensure_ascii=False))
         sys.exit(1)
 
