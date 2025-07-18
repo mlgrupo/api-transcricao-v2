@@ -21,7 +21,7 @@ from pydub.effects import normalize
 
 # Import da diarização gratuita
 try:
-    from diarization_free import diarize_audio_free, DiarizationSegment
+    from diarization import diarize_audio_free, DiarizationSegment
     DIARIZATION_AVAILABLE = True
 except ImportError:
     DIARIZATION_AVAILABLE = False
