@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Sistema de Transcrição EQUILIBRADO - Qualidade máxima + Anti-timeout
-FOCO: Fidelidade da transcrição, fallbacks apenas quando necessário
+Sistema de Transcrição com 3 CHUNKS FIXOS - Máxima estabilidade
+FOCO: Eliminar falhas no chunk 4+ usando divisão fixa em 3 partes
 """
 import sys
 import json
@@ -72,11 +72,8 @@ class AudioPreprocessor:
     def enhance_audio(self, audio: AudioSegment) -> AudioSegment:
         """Melhorias balanceadas para qualidade"""
         try:
-            # Aplicar melhorias que comprovadamente ajudam na transcrição
             audio = normalize(audio, headroom=0.1)
             
-            # Com recursos disponíveis, aplicar filtro suave de ruído
-            # Aumentar ligeiramente o ganho se áudio estiver muito baixo
             if audio.dBFS < -30:
                 audio = audio + (25 - abs(audio.dBFS))
                 
@@ -172,17 +169,16 @@ def is_invalid_transcription(text: str) -> bool:
     
     # Verificar repetições excessivas - equilibrado
     words = text_lower.split()
-    if len(words) > 5:  # Só verificar em textos com mais de 5 palavras
+    if len(words) > 5:
         word_counts = {}
         for word in words:
             if len(word) > 3:
                 word_counts[word] = word_counts.get(word, 0) + 1
         
-        # Ser mais permissivo - só rejeitar se claramente repetitivo
         for word, count in word_counts.items():
-            if count > 5 and len(words) < 20:  # Palavras muito repetidas em textos curtos
+            if count > 5 and len(words) < 20:
                 return True
-            elif count > 8:  # Muito repetitivo em qualquer caso
+            elif count > 8:
                 return True
     
     # Verificar se é muito curto
@@ -199,7 +195,7 @@ def create_high_quality_fallback_transcription(audio_path: str) -> str:
         # Carregar modelo grande para qualidade máxima
         model = whisper.load_model("large-v2", device="cpu")
         
-        # Múltiplas tentativas com configurações diferentes para máxima qualidade
+        # Múltiplas tentativas com configurações diferentes
         configurations = [
             {
                 "temperature": 0.1,
@@ -231,11 +227,10 @@ def create_high_quality_fallback_transcription(audio_path: str) -> str:
         
         for i, config in enumerate(configurations):
             try:
-                logger.info(f"Tentativa {i+1}/3 de transcrição de alta qualidade...")
+                logger.info(f"🎯 Tentativa {i+1}/3 de transcrição de alta qualidade...")
                 
-                # Timeout de 10 minutos por tentativa
                 signal.signal(signal.SIGALRM, timeout_handler)
-                signal.alarm(600)
+                signal.alarm(600)  # 10 minutos por tentativa
                 
                 result = model.transcribe(
                     audio_path,
@@ -252,13 +247,9 @@ def create_high_quality_fallback_transcription(audio_path: str) -> str:
                 
                 if text and not is_invalid_transcription(text):
                     # Avaliar qualidade do resultado
-                    score = len(text) * 2  # Priorizar textos mais longos
-                    
-                    # Bonus por palavras únicas (diversidade)
+                    score = len(text) * 2
                     words = set(text.lower().split())
                     score += len(words) * 3
-                    
-                    # Bonus por pontuação natural
                     punctuation_count = text.count('.') + text.count(',') + text.count('!') + text.count('?')
                     score += punctuation_count * 5
                     
@@ -268,17 +259,17 @@ def create_high_quality_fallback_transcription(audio_path: str) -> str:
                 
             except TimeoutException:
                 signal.alarm(0)
-                logger.warning(f"Timeout na tentativa {i+1}")
+                logger.warning(f"⏰ Timeout na tentativa {i+1}")
                 continue
             except Exception as e:
                 signal.alarm(0)
-                logger.warning(f"Erro na tentativa {i+1}: {e}")
+                logger.warning(f"❌ Erro na tentativa {i+1}: {e}")
                 continue
         
         if best_result:
             text = best_result["text"].strip()
             
-            # Criar segmentação inteligente baseada em timestamps de palavras
+            # Criar segmentação inteligente baseada em timestamps
             formatted_segments = []
             
             if "words" in best_result and best_result["words"]:
@@ -290,7 +281,6 @@ def create_high_quality_fallback_transcription(audio_path: str) -> str:
                 
                 for word_info in best_result["words"]:
                     if word_info["start"] - current_start >= segment_duration and current_segment:
-                        # Finalizar segmento atual
                         segment_text = " ".join([w["word"] for w in current_segment]).strip()
                         if segment_text:
                             timestamp = f"[{int(current_start//3600):02d}:{int((current_start%3600)//60):02d}:{int(current_start%60):02d} - {int(word_info['start']//3600):02d}:{int((word_info['start']%3600)//60):02d}:{int(word_info['start']%60):02d}]"
@@ -318,7 +308,7 @@ def create_high_quality_fallback_transcription(audio_path: str) -> str:
                 filtered_sentences = [s.strip() for s in sentences if s.strip()]
                 
                 if filtered_sentences:
-                    segment_duration = 45  # 45 segundos por frase
+                    segment_duration = 45
                     current_time = 0
                     speaker_id = 1
                     
@@ -330,7 +320,6 @@ def create_high_quality_fallback_transcription(audio_path: str) -> str:
                             formatted_segments.append(f"{timestamp} {speaker}:\n{sentence}.")
                             current_time = end_time
                             
-                            # Alternar speakers a cada 2-3 frases
                             if (i + 1) % 3 == 0:
                                 speaker_id = (speaker_id % 3) + 1
             
@@ -354,40 +343,37 @@ class TranscriptionProcessor:
     
     def load_model(self, model_size: str = "large-v2") -> whisper.Whisper:
         if self.model is None:
-            logger.info(f"Carregando modelo Whisper: {model_size}")
+            logger.info(f"🤖 Carregando modelo Whisper: {model_size}")
             try:
-                # Timeout generoso para carregamento
                 signal.signal(signal.SIGALRM, timeout_handler)
                 signal.alarm(600)  # 10 minutos para carregar
                 
                 self.model = whisper.load_model(model_size, device="cpu")
                 signal.alarm(0)
-                logger.info("Modelo carregado com sucesso")
+                logger.info("✅ Modelo carregado com sucesso")
                 
             except TimeoutException:
-                logger.error("Timeout no carregamento do modelo - tentando modelo menor")
+                logger.error("⏰ Timeout no carregamento - tentando modelo menor")
                 signal.alarm(0)
                 self.model = whisper.load_model("medium", device="cpu")
-                logger.info("Modelo 'medium' carregado com sucesso")
+                logger.info("✅ Modelo 'medium' carregado")
                 
             except Exception as e:
-                logger.error(f"Erro ao carregar modelo {model_size}: {e}")
-                logger.info("Tentando carregar modelo 'medium'...")
+                logger.error(f"❌ Erro ao carregar {model_size}: {e}")
+                logger.info("🔄 Tentando modelo 'medium'...")
                 self.model = whisper.load_model("medium", device="cpu")
-                logger.info("Modelo 'medium' carregado com sucesso")
+                logger.info("✅ Modelo 'medium' carregado")
         return self.model
     
     def transcribe_segment_safe(self, model, seg_path: str, retry_count: int = 4) -> str:
         """Transcrição com qualidade máxima e múltiplas estratégias"""
         for attempt in range(retry_count + 1):
             try:
-                # Timeout generoso para qualidade
                 signal.signal(signal.SIGALRM, timeout_handler)
                 signal.alarm(480)  # 8 minutos por segmento
                 
-                # Configurações progressivamente mais permissivas mas sempre focadas em qualidade
+                # Configurações progressivas
                 if attempt == 0:
-                    # Configuração premium para máxima qualidade
                     result = model.transcribe(
                         seg_path,
                         language="pt",
@@ -404,7 +390,6 @@ class TranscriptionProcessor:
                         word_timestamps=True
                     )
                 elif attempt == 1:
-                    # Segunda tentativa: ligeiramente mais permissiva
                     result = model.transcribe(
                         seg_path,
                         language="pt",
@@ -421,7 +406,6 @@ class TranscriptionProcessor:
                         word_timestamps=True
                     )
                 elif attempt == 2:
-                    # Terceira tentativa: mais flexível para capturar falas difíceis
                     result = model.transcribe(
                         seg_path,
                         language="pt",
@@ -437,7 +421,6 @@ class TranscriptionProcessor:
                         word_timestamps=True
                     )
                 else:
-                    # Última tentativa: máxima permissividade mantendo qualidade
                     result = model.transcribe(
                         seg_path,
                         language="pt",
@@ -453,27 +436,26 @@ class TranscriptionProcessor:
                 
                 signal.alarm(0)
                 
-                # Verificar se o resultado é válido
                 transcription = result["text"].strip()
                 
                 if is_invalid_transcription(transcription):
-                    logger.warning(f"Transcrição inválida detectada (tentativa {attempt + 1}): '{transcription[:30]}...'")
+                    logger.warning(f"❌ Transcrição inválida (tentativa {attempt + 1}): '{transcription[:30]}...'")
                     if attempt < retry_count:
                         continue
                     return ""
                 
-                logger.info(f"Transcrição válida obtida na tentativa {attempt + 1}")
+                logger.info(f"✅ Transcrição válida obtida na tentativa {attempt + 1}")
                 return transcription
                 
             except TimeoutException:
                 signal.alarm(0)
-                logger.warning(f"Timeout na transcrição do segmento (tentativa {attempt + 1})")
+                logger.warning(f"⏰ Timeout no segmento (tentativa {attempt + 1})")
                 if attempt < retry_count:
                     continue
                 return ""
             except Exception as e:
                 signal.alarm(0)
-                logger.warning(f"Erro na transcrição do segmento (tentativa {attempt + 1}): {e}")
+                logger.warning(f"❌ Erro no segmento (tentativa {attempt + 1}): {e}")
                 if attempt < retry_count:
                     continue
                 return ""
@@ -481,79 +463,82 @@ class TranscriptionProcessor:
         return ""
     
     def transcribe_audio(self, audio_path: str, output_dir: Optional[str] = None) -> str:
-        logger.info(f"Iniciando transcrição avançada EQUILIBRADA: {audio_path}")
+        logger.info(f"🎯 Iniciando transcrição com 3-CHUNKS FIXOS: {audio_path}")
         temp_files = []
         
         try:
-            # Verificar se arquivo existe
+            # Verificar arquivo
             if not os.path.exists(audio_path):
                 raise FileNotFoundError(f"Arquivo não encontrado: {audio_path}")
             
-            # Carregar áudio e pré-processar
-            logger.info("Carregando e pré-processando áudio...")
+            # Pré-processar áudio
+            logger.info("🔧 Carregando e pré-processando áudio...")
             audio = AudioSegment.from_file(audio_path)
             audio_duration = len(audio) / 1000.0
             
-            # Fallback direto apenas para áudios MUITO longos (>2 horas)
-            if audio_duration > 7200:
+            logger.info(f"📊 Duração do áudio: {audio_duration/60:.1f} minutos")
+            
+            # Fallback direto apenas para áudios MUITO longos (>3 horas)
+            if audio_duration > 10800:
                 logger.warning(f"⚠️ Áudio muito longo ({audio_duration/60:.1f} min) - usando transcrição de alta qualidade")
                 return create_high_quality_fallback_transcription(audio_path)
             
             audio = self.audio_preprocessor.process(audio)
             
-            # Salvar áudio processado temporariamente
+            # Salvar áudio processado
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
                 audio.export(temp_file.name, format='wav')
                 temp_path = temp_file.name
                 temp_files.append(temp_path)
             
-            # DIARIZAÇÃO com prioridade para qualidade
-            logger.info("Executando diarização de alta qualidade...")
+            # DIARIZAÇÃO com 3 chunks fixos
+            logger.info("🎯 Executando diarização com 3 chunks fixos...")
             try:
                 diarization_segments: List[DiarizationSegment] = diarize_audio(temp_path)
-                logger.info(f"{len(diarization_segments)} segmentos de locutores detectados.")
+                logger.info(f"✅ {len(diarization_segments)} segmentos detectados")
                 
-                # Verificar se diarização detectou segmentos válidos
                 if not diarization_segments:
-                    logger.warning("Nenhum segmento detectado - usando transcrição de alta qualidade")
+                    logger.warning("❌ Nenhum segmento detectado - usando fallback")
                     return create_high_quality_fallback_transcription(audio_path)
                 
                 unique_speakers = set(seg.speaker for seg in diarization_segments)
-                logger.info(f"Speakers únicos detectados: {list(unique_speakers)}")
+                logger.info(f"🗣️ Speakers detectados: {list(unique_speakers)}")
                 
             except Exception as e:
-                logger.error(f"Erro na diarização: {e} - usando transcrição de alta qualidade")
+                logger.error(f"❌ Erro na diarização: {e} - usando fallback")
                 return create_high_quality_fallback_transcription(audio_path)
             
-            # Carregar modelo Whisper para máxima qualidade
+            # Carregar Whisper
             try:
                 model = self.load_model("large-v2")
             except Exception as e:
-                logger.error(f"Erro ao carregar modelo: {e} - usando transcrição de alta qualidade")
+                logger.error(f"❌ Erro ao carregar modelo: {e} - usando fallback")
                 return create_high_quality_fallback_transcription(audio_path)
             
-            # Transcrever cada segmento com qualidade máxima
+            # Transcrever cada segmento
             formatted_segments = []
             total_segments = len(diarization_segments)
             valid_transcriptions = 0
             
+            logger.info(f"🚀 Iniciando transcrição de {total_segments} segmentos")
+            
             for i, seg in enumerate(diarization_segments):
-                logger.info(f"Transcrevendo segmento {i+1}/{total_segments} ({seg.speaker})")
+                logger.info(f"📝 Segmento {i+1}/{total_segments} ({seg.speaker}) - {seg.start:.1f}s a {seg.end:.1f}s")
                 
                 try:
-                    # Extrair segmento do áudio
+                    # Extrair segmento
                     start_ms = max(0, int(seg.start * 1000))
                     end_ms = min(len(audio), int(seg.end * 1000))
                     
                     if end_ms <= start_ms:
-                        logger.warning(f"Segmento inválido: {start_ms}-{end_ms}ms")
+                        logger.warning(f"⚠️ Segmento inválido: {start_ms}-{end_ms}ms")
                         continue
                     
                     seg_audio = audio[start_ms:end_ms]
                     
-                    # Aceitar segmentos de 0.3 segundos ou mais (mais permissivo para capturar interjeições)
+                    # Aceitar segmentos de 0.3s ou mais
                     if len(seg_audio) < 300:
-                        logger.info(f"Pulando segmento muito curto: {len(seg_audio)}ms")
+                        logger.info(f"⏭️ Pulando segmento muito curto: {len(seg_audio)}ms")
                         continue
                     
                     with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as seg_file:
@@ -561,10 +546,10 @@ class TranscriptionProcessor:
                         seg_path = seg_file.name
                         temp_files.append(seg_path)
                     
-                    # Transcrever segmento com múltiplas tentativas
+                    # Transcrever com múltiplas tentativas
                     transcription_text = self.transcribe_segment_safe(model, seg_path, retry_count=4)
                     
-                    # Processar texto se válido
+                    # Processar texto
                     if transcription_text.strip():
                         processed_text = self.text_processor.clean_text(transcription_text)
                         
@@ -580,36 +565,35 @@ class TranscriptionProcessor:
                         logger.info(f"⚠️ Segmento {i+1} vazio")
                 
                 except Exception as e:
-                    logger.error(f"Erro ao processar segmento {i+1}: {e}")
+                    logger.error(f"❌ Erro no segmento {i+1}: {e}")
                     continue
             
-            # Verificar se temos resultados válidos
+            # Verificar resultados
             if not formatted_segments:
-                logger.warning("Nenhum segmento foi transcrito - usando transcrição de alta qualidade")
+                logger.warning("❌ Nenhum segmento transcrito - usando fallback")
                 return create_high_quality_fallback_transcription(audio_path)
             
-            # Aceitar taxa de sucesso mais baixa para preservar qualidade dos segmentos válidos
             success_rate = valid_transcriptions / total_segments
-            if success_rate < 0.1:  # Reduzido de 0.2 para 0.1 - menos restritivo
-                logger.warning(f"Taxa de sucesso baixa ({success_rate:.1%}) - usando transcrição de alta qualidade")
+            if success_rate < 0.1:  # 10% mínimo
+                logger.warning(f"❌ Taxa de sucesso baixa ({success_rate:.1%}) - usando fallback")
                 return create_high_quality_fallback_transcription(audio_path)
             
             result = "\n\n".join(formatted_segments)
-            logger.info(f"🎉 Transcrição de qualidade concluída: {valid_transcriptions}/{total_segments} segmentos válidos ({success_rate:.1%})")
+            logger.info(f"🎉 TRANSCRIÇÃO 3-CHUNKS CONCLUÍDA: {valid_transcriptions}/{total_segments} segmentos ({success_rate:.1%} sucesso)")
             
             return result
             
         except Exception as e:
-            logger.error(f"Erro crítico na transcrição: {e} - usando fallback de alta qualidade")
+            logger.error(f"💥 Erro crítico: {e} - usando fallback")
             return create_high_quality_fallback_transcription(audio_path)
         finally:
-            # Limpar arquivos temporários
+            # Limpeza
             for temp_file in temp_files:
                 try:
                     if os.path.exists(temp_file):
                         os.unlink(temp_file)
                 except Exception as e:
-                    logger.warning(f"Erro ao remover arquivo temporário {temp_file}: {e}")
+                    logger.warning(f"⚠️ Erro ao remover {temp_file}: {e}")
 
 def main():
     if len(sys.argv) < 2:
@@ -634,20 +618,20 @@ def main():
             output_file = os.path.join(output_dir, "transcricao.txt")
             with open(output_file, 'w', encoding='utf-8') as f:
                 f.write(result)
-            logger.info(f"Transcrição salva em: {output_file}")
+            logger.info(f"💾 Transcrição salva em: {output_file}")
         
         output = {
             "status": "success",
             "text": result,
             "language": "pt",
-            "processing_type": "diarization_whisper_quality_balanced",
+            "processing_type": "diarization_whisper_3chunks_fixed",
             "timestamp": datetime.now().isoformat()
         }
         
         print(json.dumps(output, ensure_ascii=False))
         
     except Exception as e:
-        logger.error(f"Erro na execução: {e}")
+        logger.error(f"💥 Erro na execução: {e}")
         print(json.dumps({
             "status": "error",
             "error": str(e)

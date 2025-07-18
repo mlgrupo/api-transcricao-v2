@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Diarização EQUILIBRADA - Alta fidelidade + Anti-timeout
-FOCO: Qualidade máxima da diarização, timeouts apenas como última proteção
+Diarização EQUILIBRADA - Sempre 3 chunks para máxima estabilidade
+FOCO: Qualidade máxima da diarização, divisão fixa em 3 chunks
 """
 from pyannote.audio import Pipeline
 import os
@@ -15,6 +15,7 @@ import torch
 import tempfile
 import psutil
 import gc
+import math
 
 # Token HuggingFace
 HF_TOKEN = os.environ.get("HF_TOKEN")
@@ -157,8 +158,8 @@ class ServerResourceManager:
     """Gerencia recursos priorizando QUALIDADE da diarização"""
     
     def __init__(self):
-        self.max_cpu_cores = min(6, os.cpu_count())  # RESTAURADO: 6 cores para qualidade
-        self.max_ram_gb = 28  # AUMENTADO: Usar quase toda RAM para qualidade
+        self.max_cpu_cores = min(6, os.cpu_count())
+        self.max_ram_gb = 28
         
     def check_resources(self) -> dict:
         """Verifica recursos disponíveis do servidor"""
@@ -169,39 +170,24 @@ class ServerResourceManager:
             'cpu_percent': cpu_percent,
             'memory_percent': memory.percent,
             'memory_available_gb': memory.available / (1024**3),
-            'safe_to_process': cpu_percent < 85 and memory.percent < 80  # Mais agressivo para qualidade
+            'safe_to_process': cpu_percent < 85 and memory.percent < 80
         }
     
-    def get_optimal_chunk_size(self, audio_duration: float) -> int:
-        """REBALANCEADO: Chunks maiores para melhor qualidade"""
-        resources = self.check_resources()
+    def get_chunk_timeout(self, chunk_duration: float) -> int:
+        """Calcula timeout dinâmico baseado na duração do chunk"""
+        # Timeout base: 2 minutos por minuto de áudio + buffer
+        base_timeout = int(chunk_duration / 60 * 2)  # 2 min por min de áudio
+        buffer_timeout = 5  # 5 minutos de buffer
         
-        # Priorizar qualidade: chunks maiores quando possível
-        if audio_duration <= 900:  # 15 min - processamento direto
-            return int(audio_duration)
-        
-        # Chunks balanceados qualidade/performance
-        if resources['memory_available_gb'] > 25:
-            base_chunk = 480  # 8 minutos (aumentado)
-        elif resources['memory_available_gb'] > 20:
-            base_chunk = 360  # 6 minutos (aumentado)
-        else:
-            base_chunk = 240  # 4 minutos (ainda maior que antes)
-        
-        # Ajuste para duração total
-        if audio_duration > 7200:  # 2 horas
-            return min(base_chunk, 360)  # Máximo 6 min (era 5)
-        elif audio_duration > 3600:  # 1 hora
-            return min(base_chunk, 480)  # Máximo 8 min (era 7.5)
-        else:
-            return base_chunk
+        # Mínimo 10 minutos, máximo 30 minutos
+        timeout = max(10, min(30, base_timeout + buffer_timeout))
+        logger.info(f"Timeout calculado para chunk de {chunk_duration/60:.1f}min: {timeout}min")
+        return timeout
     
     def configure_torch(self):
         """Configuração otimizada para QUALIDADE"""
-        # Usar todos os cores disponíveis para qualidade
         torch.set_num_threads(self.max_cpu_cores)
         
-        # Limpeza de memória
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         
@@ -216,68 +202,72 @@ def get_audio_duration(audio_path: str) -> float:
         logger.warning(f"Erro ao obter duração do áudio: {e}")
         return 0
 
-def split_audio_for_server(audio_path: str, chunk_duration: int, max_chunks: int = 50) -> List[tuple]:
-    """MELHORADO: Chunks inteligentes que preservam continuidade"""
+def split_audio_into_3_chunks(audio_path: str) -> List[tuple]:
+    """NOVO: Sempre divide em exatamente 3 chunks para máxima estabilidade"""
     try:
         audio = AudioSegment.from_file(audio_path)
         total_duration = len(audio) / 1000.0
         
-        if total_duration <= chunk_duration:
-            return [(audio_path, 0.0, total_duration)]
+        logger.info(f"🔪 DIVISÃO FIXA: Dividindo áudio de {total_duration/60:.1f}min em exatamente 3 chunks")
         
-        # Calcular número de chunks necessários
-        needed_chunks = int(total_duration / chunk_duration) + 1
+        # Calcular duração de cada chunk
+        chunk_duration = total_duration / 3.0
+        overlap = min(30, chunk_duration * 0.1)  # 10% overlap, máximo 30s
         
-        if needed_chunks > max_chunks:
-            # Ajustar mantendo qualidade mínima
-            chunk_duration = max(120, int(total_duration / max_chunks))  # Mínimo 2 minutos
-            logger.warning(f"Ajustando chunk para {chunk_duration}s para limitar a {max_chunks} chunks")
-        
-        logger.info(f"Dividindo áudio de {total_duration/60:.1f}min em chunks de {chunk_duration/60:.1f}min")
+        logger.info(f"📊 Cada chunk terá ~{chunk_duration/60:.1f}min com overlap de {overlap}s")
         
         chunks = []
-        current_time = 0.0
-        overlap = min(30, chunk_duration * 0.15)  # AUMENTADO: 15% overlap para continuidade
         
-        while current_time < total_duration:
-            start_time = max(0, current_time - overlap) if len(chunks) > 0 else current_time
-            end_time = min(current_time + chunk_duration, total_duration)
-            
-            # Extrair chunk
-            start_ms = int(start_time * 1000)
-            end_ms = int(end_time * 1000)
-            chunk_audio = audio[start_ms:end_ms]
-            
-            # Salvar chunk temporário
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+        # Chunk 1: início até 1/3 + overlap
+        start_1 = 0
+        end_1 = chunk_duration + overlap
+        chunk_1_audio = audio[int(start_1 * 1000):int(min(end_1, total_duration) * 1000)]
+        
+        # Chunk 2: 1/3 - overlap até 2/3 + overlap  
+        start_2 = chunk_duration - overlap
+        end_2 = (chunk_duration * 2) + overlap
+        chunk_2_audio = audio[int(start_2 * 1000):int(min(end_2, total_duration) * 1000)]
+        
+        # Chunk 3: 2/3 - overlap até o final
+        start_3 = (chunk_duration * 2) - overlap
+        end_3 = total_duration
+        chunk_3_audio = audio[int(start_3 * 1000):int(end_3 * 1000)]
+        
+        # Salvar chunks temporários
+        for i, (chunk_audio, start_time, end_time) in enumerate([
+            (chunk_1_audio, start_1, min(end_1, total_duration)),
+            (chunk_2_audio, start_2, min(end_2, total_duration)), 
+            (chunk_3_audio, start_3, end_3)
+        ], 1):
+            with tempfile.NamedTemporaryFile(suffix=f'_chunk{i}.wav', delete=False) as temp_file:
                 chunk_audio.export(temp_file.name, format='wav', parameters=["-ac", "1", "-ar", "16000"])
-                chunks.append((temp_file.name, start_time, end_time))
-            
-            current_time += chunk_duration
+                chunk_info = (temp_file.name, start_time, end_time)
+                chunks.append(chunk_info)
+                logger.info(f"✅ Chunk {i}: {start_time/60:.1f}min - {end_time/60:.1f}min ({(end_time-start_time)/60:.1f}min)")
         
-        logger.info(f"Criados {len(chunks)} chunks")
+        logger.info(f"🎯 Divisão concluída: 3 chunks criados com sucesso")
         return chunks
         
     except Exception as e:
-        logger.error(f"Erro ao dividir áudio: {e}")
+        logger.error(f"Erro ao dividir áudio em 3 chunks: {e}")
         return [(audio_path, 0.0, get_audio_duration(audio_path))]
 
-def diarize_chunk_optimized(pipeline, chunk_path: str, timeout_minutes: int = 15) -> List[DiarizationSegment]:
+def diarize_chunk_optimized(pipeline, chunk_path: str, chunk_info: str, timeout_minutes: int = 15) -> List[DiarizationSegment]:
     """QUALIDADE MÁXIMA: Configurações otimizadas para fidelidade"""
     segments = []
     
     try:
-        # Timeout generoso para qualidade
+        # Timeout específico para este chunk
         signal.signal(signal.SIGALRM, timeout_handler)
         signal.alarm(timeout_minutes * 60)
         
-        logger.info(f"Diarizando chunk (timeout: {timeout_minutes}min)")
+        logger.info(f"🔄 Processando {chunk_info} (timeout: {timeout_minutes}min)")
         
         # CONFIGURAÇÃO PARA MÁXIMA QUALIDADE
         diarization = pipeline(
             chunk_path,
             min_speakers=1,
-            max_speakers=8,  # RESTAURADO: Até 8 speakers para fidelidade
+            max_speakers=8,
         )
         
         signal.alarm(0)
@@ -285,7 +275,7 @@ def diarize_chunk_optimized(pipeline, chunk_path: str, timeout_minutes: int = 15
         for turn, _, speaker in diarization.itertracks(yield_label=True):
             segments.append(DiarizationSegment(turn.start, turn.end, speaker))
         
-        logger.info(f"✅ Chunk processado: {len(segments)} segmentos")
+        logger.info(f"✅ {chunk_info} processado: {len(segments)} segmentos")
         
         # Limpeza de memória após chunk
         gc.collect()
@@ -296,7 +286,7 @@ def diarize_chunk_optimized(pipeline, chunk_path: str, timeout_minutes: int = 15
         
     except TimeoutException:
         signal.alarm(0)
-        logger.error(f"❌ Timeout no chunk ({timeout_minutes}min) - usando fallback inteligente")
+        logger.error(f"❌ Timeout no {chunk_info} ({timeout_minutes}min) - usando fallback inteligente")
         
         # FALLBACK INTELIGENTE em caso de timeout
         chunk_duration = get_audio_duration(chunk_path)
@@ -304,86 +294,72 @@ def diarize_chunk_optimized(pipeline, chunk_path: str, timeout_minutes: int = 15
         
     except Exception as e:
         signal.alarm(0)
-        logger.error(f"❌ Erro no chunk: {e} - usando fallback inteligente")
+        logger.error(f"❌ Erro no {chunk_info}: {e} - usando fallback inteligente")
         
         # FALLBACK INTELIGENTE em caso de erro
         chunk_duration = get_audio_duration(chunk_path)
         return intelligent_fallback_diarization(chunk_path, chunk_duration)
 
-def merge_chunks_advanced(chunk_results: List[tuple]) -> List[DiarizationSegment]:
-    """MELHORADO: Mesclagem que preserva identidade de speakers"""
+def merge_3_chunks_advanced(chunk_results: List[tuple]) -> List[DiarizationSegment]:
+    """MELHORADO: Mesclagem específica para 3 chunks"""
+    if len(chunk_results) != 3:
+        logger.warning(f"⚠️ Esperado 3 chunks, recebido {len(chunk_results)}")
+    
     all_segments = []
     speaker_mapping = {}
     next_speaker_id = 0
     
-    # Análise de sobreposição para melhor mapeamento
-    speaker_profiles = {}  # Para rastrear características de cada speaker
+    logger.info("🔗 Mesclando 3 chunks com preservação de identidade...")
     
-    logger.info(f"Mesclando {len(chunk_results)} chunks com preservação de identidade...")
-    
+    # Processar cada chunk
     for chunk_idx, (segments, chunk_start, chunk_end) in enumerate(chunk_results):
         chunk_speakers = {}
+        chunk_name = f"Chunk {chunk_idx + 1}"
+        
+        logger.info(f"📝 Processando {chunk_name}: {len(segments)} segmentos")
         
         for segment in segments:
             global_start = segment.start + chunk_start
             global_end = segment.end + chunk_start
             
             if segment.speaker not in chunk_speakers:
-                # Mapear speaker com análise de contexto
                 if chunk_idx == 0:
                     # Primeiro chunk - estabelecer baseline
                     global_speaker = f"SPEAKER_{next_speaker_id:02d}"
                     chunk_speakers[segment.speaker] = global_speaker
-                    speaker_profiles[global_speaker] = {
-                        'last_seen': global_end,
-                        'total_duration': global_end - global_start,
-                        'segments_count': 1
-                    }
                     next_speaker_id += 1
                 else:
-                    # Chunks seguintes - análise inteligente de continuidade
+                    # Chunks 2 e 3 - análise de continuidade
                     best_match = None
                     best_score = 0
                     
-                    # Procurar speaker que fala próximo ao início deste chunk
-                    for existing_speaker, profile in speaker_profiles.items():
-                        time_gap = global_start - profile['last_seen']
+                    # Procurar por continuidade temporal
+                    for existing_speaker in speaker_mapping.values():
+                        # Encontrar último segmento deste speaker
+                        last_end = 0
+                        for prev_seg in all_segments:
+                            if prev_seg.speaker == existing_speaker:
+                                last_end = max(last_end, prev_seg.end)
                         
-                        # Score baseado em proximidade temporal e padrões
-                        if time_gap < 120:  # 2 minutos de tolerância
-                            score = max(0, 1 - (time_gap / 120))
-                            
-                            # Bonus se duração do segmento é similar ao padrão do speaker
-                            avg_duration = profile['total_duration'] / profile['segments_count']
-                            duration_similarity = 1 - abs((global_end - global_start) - avg_duration) / max(avg_duration, 30)
-                            score += duration_similarity * 0.3
-                            
+                        time_gap = global_start - last_end
+                        
+                        # Score baseado em proximidade
+                        if time_gap < 180:  # 3 minutos de tolerância
+                            score = max(0, 1 - (time_gap / 180))
                             if score > best_score:
                                 best_score = score
                                 best_match = existing_speaker
                     
-                    if best_match and best_score > 0.4:  # Threshold para aceitar match
+                    if best_match and best_score > 0.3:
                         chunk_speakers[segment.speaker] = best_match
-                        # Atualizar perfil
-                        speaker_profiles[best_match]['last_seen'] = global_end
-                        speaker_profiles[best_match]['total_duration'] += global_end - global_start
-                        speaker_profiles[best_match]['segments_count'] += 1
+                        logger.info(f"🔗 Speaker {segment.speaker} mapeado para {best_match} (score: {best_score:.2f})")
                     else:
                         # Novo speaker
                         global_speaker = f"SPEAKER_{next_speaker_id:02d}"
                         chunk_speakers[segment.speaker] = global_speaker
-                        speaker_profiles[global_speaker] = {
-                            'last_seen': global_end,
-                            'total_duration': global_end - global_start,
-                            'segments_count': 1
-                        }
+                        speaker_mapping[f"{chunk_idx}_{segment.speaker}"] = global_speaker
                         next_speaker_id += 1
-            else:
-                # Speaker já mapeado neste chunk
-                mapped_speaker = chunk_speakers[segment.speaker]
-                speaker_profiles[mapped_speaker]['last_seen'] = global_end
-                speaker_profiles[mapped_speaker]['total_duration'] += global_end - global_start
-                speaker_profiles[mapped_speaker]['segments_count'] += 1
+                        logger.info(f"🆕 Novo speaker: {segment.speaker} → {global_speaker}")
             
             all_segments.append(DiarizationSegment(
                 global_start, global_end, chunk_speakers[segment.speaker]
@@ -392,7 +368,7 @@ def merge_chunks_advanced(chunk_results: List[tuple]) -> List[DiarizationSegment
     # Ordenar por tempo
     all_segments.sort(key=lambda x: x.start)
     
-    # Mesclagem inteligente preservando micro-pausas naturais
+    # Mesclagem final preservando micro-pausas
     if not all_segments:
         return []
     
@@ -400,19 +376,19 @@ def merge_chunks_advanced(chunk_results: List[tuple]) -> List[DiarizationSegment
     for segment in all_segments[1:]:
         last = merged[-1]
         if (last.speaker == segment.speaker and 
-            segment.start - last.end <= 2.5):  # 2.5s para pausas naturais
+            segment.start - last.end <= 3.0):  # 3s para pausas naturais
             last.end = max(last.end, segment.end)
         else:
             merged.append(segment)
     
     speakers = set(seg.speaker for seg in merged)
-    logger.info(f"✅ Mesclagem avançada concluída: {len(merged)} segmentos, {len(speakers)} speakers")
+    logger.info(f"✅ Mesclagem de 3 chunks concluída: {len(merged)} segmentos, {len(speakers)} speakers")
     
     return merged
 
 def diarize_audio(audio_path: str) -> List[DiarizationSegment]:
     """
-    🖥️ DIARIZAÇÃO EQUILIBRADA - Máxima fidelidade com proteção anti-timeout
+    🎯 DIARIZAÇÃO FIXA EM 3 CHUNKS - Máxima estabilidade e qualidade
     """
     hf_token = HF_TOKEN
     if not hf_token:
@@ -426,10 +402,10 @@ def diarize_audio(audio_path: str) -> List[DiarizationSegment]:
     logger.info(f"🖥️ SERVIDOR: CPU {resources['cpu_percent']:.1f}%, RAM {resources['memory_percent']:.1f}% ({resources['memory_available_gb']:.1f}GB livre)")
     
     duration = get_audio_duration(audio_path)
-    logger.info(f"🎤 DIARIZAÇÃO QUALIDADE: Áudio de {duration/60:.1f} minutos")
+    logger.info(f"🎤 DIARIZAÇÃO 3-CHUNKS: Áudio de {duration/60:.1f} minutos")
     
-    # Fallback apenas para áudios EXTREMAMENTE longos (>2 horas)
-    if duration > 7200:  # 2 horas
+    # Fallback apenas para áudios EXTREMAMENTE longos (>3 horas)
+    if duration > 10800:  # 3 horas
         logger.warning("⚠️ Áudio extremamente longo - usando diarização inteligente")
         return intelligent_fallback_diarization(audio_path, duration)
     
@@ -437,13 +413,12 @@ def diarize_audio(audio_path: str) -> List[DiarizationSegment]:
         # Configurar PyTorch para qualidade máxima
         resource_manager.configure_torch()
         
-        # Carregar pipeline com timeout de segurança
-        logger.info("Carregando pipeline otimizado para qualidade...")
+        # Carregar pipeline
+        logger.info("🔧 Carregando pipeline otimizado para qualidade...")
         start_time = time.time()
         
-        # Timeout para carregamento do pipeline
         signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(1200)  # 10 minutos para carregar (generoso)
+        signal.alarm(600)  # 10 minutos para carregar
         
         try:
             pipeline = Pipeline.from_pretrained(
@@ -451,7 +426,6 @@ def diarize_audio(audio_path: str) -> List[DiarizationSegment]:
                 use_auth_token=hf_token
             )
             
-            # Configuração de hardware
             if torch.cuda.is_available():
                 logger.info("🚀 GPU detectada - usando aceleração")
                 pipeline = pipeline.to(torch.device("cuda"))
@@ -462,57 +436,60 @@ def diarize_audio(audio_path: str) -> List[DiarizationSegment]:
             signal.alarm(0)
             
         except TimeoutException:
-            logger.error("❌ Timeout no carregamento do pipeline - usando fallback")
+            logger.error("❌ Timeout no carregamento do pipeline")
             return intelligent_fallback_diarization(audio_path, duration)
         
         load_time = time.time() - start_time
-        logger.info(f"Pipeline carregado em {load_time:.1f}s")
+        logger.info(f"✅ Pipeline carregado em {load_time:.1f}s")
         
-        # Determinar estratégia baseada na duração
-        chunk_size = resource_manager.get_optimal_chunk_size(duration)
-        
-        if chunk_size >= duration and duration <= 1200:  # Processamento direto até 15 min
-            logger.info("📋 Processamento direto para máxima qualidade")
+        # Processamento direto para áudios curtos (≤20 min)
+        if duration <= 1200:  # 20 minutos
+            logger.info("⚡ Processamento direto para áudio curto")
             
             try:
-                segments = diarize_chunk_optimized(pipeline, audio_path, timeout_minutes=20)
+                timeout_min = resource_manager.get_chunk_timeout(duration)
+                segments = diarize_chunk_optimized(pipeline, audio_path, "áudio completo", timeout_min)
                 speakers = set(seg.speaker for seg in segments)
-                logger.info(f"✅ QUALIDADE MÁXIMA: {len(segments)} segmentos, {len(speakers)} speakers")
+                logger.info(f"✅ PROCESSAMENTO DIRETO: {len(segments)} segmentos, {len(speakers)} speakers")
                 return segments
                 
             except Exception as e:
-                logger.error(f"Falha no processamento direto: {e} - usando fallback inteligente")
+                logger.error(f"Falha no processamento direto: {e}")
                 return intelligent_fallback_diarization(audio_path, duration)
         
-        else:  # Processamento em chunks com máxima qualidade
-            logger.info(f"🔄 Processamento em chunks de {chunk_size/60:.1f}min para qualidade")
+        else:  # Processamento em 3 chunks
+            logger.info("🔪 Divisão em 3 chunks para áudio longo")
             
-            chunks = split_audio_for_server(audio_path, chunk_size, max_chunks=60)
+            chunks = split_audio_into_3_chunks(audio_path)
             chunk_results = []
             temp_files = []
             
             try:
-                for i, (chunk_path, start_time, end_time) in enumerate(chunks):
+                for i, (chunk_path, start_time_chunk, end_time_chunk) in enumerate(chunks):
                     temp_files.append(chunk_path)
                     
                     # Verificar recursos antes de cada chunk
                     resources = resource_manager.check_resources()
                     if resources['memory_percent'] > 85:
-                        logger.warning("⚠️ RAM alta - executando garbage collection")
+                        logger.warning("🧹 RAM alta - limpando memória")
                         gc.collect()
                         time.sleep(2)
                     
-                    logger.info(f"🔄 Chunk {i+1}/{len(chunks)} (RAM: {resources['memory_percent']:.1f}%)")
+                    chunk_duration = end_time_chunk - start_time_chunk
+                    timeout_min = resource_manager.get_chunk_timeout(chunk_duration)
+                    chunk_info = f"Chunk {i+1}/3"
                     
-                    # Processar chunk com qualidade máxima
-                    segments = diarize_chunk_optimized(pipeline, chunk_path, timeout_minutes=15)
-                    chunk_results.append((segments, start_time, end_time))
+                    logger.info(f"🚀 Iniciando {chunk_info} (RAM: {resources['memory_percent']:.1f}%)")
+                    
+                    # Processar chunk
+                    segments = diarize_chunk_optimized(pipeline, chunk_path, chunk_info, timeout_min)
+                    chunk_results.append((segments, start_time_chunk, end_time_chunk))
                 
-                # Mesclar com preservação de identidade
-                final_segments = merge_chunks_advanced(chunk_results)
+                # Mesclar 3 chunks
+                final_segments = merge_3_chunks_advanced(chunk_results)
                 
                 speakers = set(seg.speaker for seg in final_segments)
-                logger.info(f"✅ QUALIDADE PRESERVADA: {len(final_segments)} segmentos, {len(speakers)} speakers")
+                logger.info(f"🎯 PROCESSAMENTO 3-CHUNKS CONCLUÍDO: {len(final_segments)} segmentos, {len(speakers)} speakers")
                 return final_segments
                 
             finally:
@@ -524,13 +501,12 @@ def diarize_audio(audio_path: str) -> List[DiarizationSegment]:
                     except:
                         pass
                 
-                # Limpeza final de memória
                 gc.collect()
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
         
     except Exception as e:
-        logger.error(f"❌ Erro crítico: {e} - usando fallback inteligente final")
+        logger.error(f"❌ Erro crítico: {e}")
         return intelligent_fallback_diarization(audio_path, duration)
 
 if __name__ == "__main__":
@@ -541,7 +517,7 @@ if __name__ == "__main__":
     audio_path = sys.argv[1]
     
     try:
-        logger.info(f"🖥️ Iniciando diarização EQUILIBRADA: {audio_path}")
+        logger.info(f"🎯 Iniciando diarização FIXA-3-CHUNKS: {audio_path}")
         segments = diarize_audio(audio_path)
         
         # Output
