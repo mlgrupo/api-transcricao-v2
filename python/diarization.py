@@ -443,7 +443,7 @@ def diarize_audio(audio_path: str) -> List[DiarizationSegment]:
         
         # Timeout para carregamento do pipeline
         signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(600)  # 10 minutos para carregar (generoso)
+        signal.alarm(1200)  # 10 minutos para carregar (generoso)
         
         try:
             pipeline = Pipeline.from_pretrained(
@@ -471,7 +471,7 @@ def diarize_audio(audio_path: str) -> List[DiarizationSegment]:
         # Determinar estratégia baseada na duração
         chunk_size = resource_manager.get_optimal_chunk_size(duration)
         
-        if chunk_size >= duration and duration <= 900:  # Processamento direto até 15 min
+        if chunk_size >= duration and duration <= 1200:  # Processamento direto até 15 min
             logger.info("📋 Processamento direto para máxima qualidade")
             
             try:
