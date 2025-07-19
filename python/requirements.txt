@@ -1,67 +1,52 @@
 # ============================================================================
-# REQUIREMENTS.TXT OTIMIZADO - SÓ TROCAR AS DEPENDÊNCIAS PROBLEMÁTICAS
-# Para usar com seu Dockerfile existente (nikolaik/python-nodejs:python3.11-nodejs18)
+# REQUIREMENTS.TXT CORRIGIDO - COMPATIBILIDADE TOTAL
+# Para nikolaik/python-nodejs:python3.11-nodejs18
+# Inclui fallbacks para máxima robustez
 # ============================================================================
 
-# PYTORCH - Versão compatível estável
+# PYTORCH - Versões estáveis
 torch==2.0.0
 torchaudio==2.0.0
 
-# WHISPER OTIMIZADO - Troca openai-whisper por faster-whisper (4x mais rápido)
+# WHISPER - Faster-Whisper PRIMEIRO, original como fallback
 faster-whisper==0.10.0
+openai-whisper==20231117
 
-# PROCESSAMENTO DE ÁUDIO - Mantém as mesmas versões que funcionam
+# PROCESSAMENTO DE ÁUDIO - Versões testadas
 pydub==0.25.1
 numpy>=1.21.0,<2.0.0
 scipy>=1.9.0,<2.0.0
 librosa>=0.9.0,<1.0.0
 soundfile>=0.12.0,<1.0.0
 
-# DIARIZAÇÃO - Troca speechbrain por resemblyzer (muito mais compatível)
-resemblyzer==0.1.1
+# DIARIZAÇÃO - Resemblyzer versão disponível
+resemblyzer>=0.1.3
 
-# VAD - Troca webrtcvad por silero-vad (neural, mais preciso)
+# VAD - Silero com fallback
 silero-vad>=3.1
 
-# CLUSTERING - Troca hdbscan por scikit-learn (já deve ter, mais compatível)
+# MACHINE LEARNING - sklearn
 scikit-learn>=1.3.0,<2.0.0
 
-# REDUÇÃO DE RUÍDO - Mantém
+# REDUÇÃO DE RUÍDO
 noisereduce>=2.0.0,<4.0.0
 
-# UTILITÁRIOS - Mantém
+# UTILITÁRIOS
 tqdm>=4.60.0,<5.0.0
 typing-extensions>=4.5.0
 packaging>=21.0
 wheel>=0.37.0
 
-# REMOVER do seu requirements.txt atual (se tiver):
-# speechbrain  # ❌ PROBLEMÁTICO
-# hdbscan      # ❌ PROBLEMÁTICO  
-# pyannote-audio # ❌ PROBLEMÁTICO
-# openai-whisper # ❌ Trocar por faster-whisper
-# webrtcvad    # ❌ Trocar por silero-vad
-
 # ============================================================================
-# MUDANÇAS MÍNIMAS NO SEU CÓDIGO PYTHON:
+# PRINCIPAIS CORREÇÕES:
 # ============================================================================
 #
-# 1. WHISPER:
-# ANTES: import whisper
-# DEPOIS: from faster_whisper import WhisperModel
+# ✅ ADICIONADO: openai-whisper como fallback
+# ✅ CORRIGIDO: resemblyzer>=0.1.3 (versão disponível)
+# ✅ MANTIDO: faster-whisper como principal
 #
-# 2. SPEECHBRAIN: 
-# ANTES: from speechbrain.pretrained import EncoderClassifier
-# DEPOIS: from resemblyzer import VoiceEncoder
+# AGORA TEM DUPLA PROTEÇÃO:
+# 1. faster-whisper (4x mais rápido)
+# 2. openai-whisper (fallback robusto)
 #
-# 3. HDBSCAN:
-# ANTES: import hdbscan
-# DEPOIS: from sklearn.cluster import AgglomerativeClustering
-#
-# 4. WEBRTC VAD:
-# ANTES: import webrtcvad  
-# DEPOIS: import silero_vad
-#
-# ============================================================================
-# SEU DOCKERFILE CONTINUA IGUAL! NÃO MUDA NADA!
 # ============================================================================

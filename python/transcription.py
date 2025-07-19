@@ -54,7 +54,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score
 
 # Core components otimizados - MUDANÇAS PRINCIPAIS
-from faster_whisper import WhisperModel, BatchedInferencePipeline  # ✅ Substitui openai-whisper
+from faster_whisper import WhisperModel  # ✅ Substitui openai-whisper (sem BatchedInferencePipeline)
 from resemblyzer import VoiceEncoder, preprocess_wav  # ✅ Substitui speechbrain
 import silero_vad  # ✅ Substitui webrtcvad
 
@@ -100,7 +100,6 @@ class OptimizedFasterWhisperTranscriber:
         self.model_size = model_size
         self.device = device
         self.model = None
-        self.batched_model = None
         
     def load_model(self):
         """Carregamento lazy do modelo com configurações otimizadas"""
@@ -115,8 +114,6 @@ class OptimizedFasterWhisperTranscriber:
                     cpu_threads=torch_threads
                 )
                 
-                # Pipeline com batching para áudios longos
-                self.batched_model = BatchedInferencePipeline(model=self.model)
                 logger.info("✅ Faster-Whisper carregado com sucesso")
                 
             except Exception as e:
@@ -124,7 +121,7 @@ class OptimizedFasterWhisperTranscriber:
                 # Fallback para modelo menor
                 self._load_fallback_model()
         
-        return self.model, self.batched_model
+        return self.model
     
     def _load_fallback_model(self):
         """Modelo de fallback se o principal falhar"""
@@ -137,7 +134,6 @@ class OptimizedFasterWhisperTranscriber:
                 num_workers=1,
                 cpu_threads=max(1, torch_threads // 2)
             )
-            self.batched_model = BatchedInferencePipeline(model=self.model)
             self.model_size = "medium"
             logger.info("✅ Modelo de fallback carregado")
         except Exception as e:
@@ -145,7 +141,6 @@ class OptimizedFasterWhisperTranscriber:
             # Último fallback: modelo tiny
             try:
                 self.model = WhisperModel("tiny", device=self.device, compute_type="int8")
-                self.batched_model = BatchedInferencePipeline(model=self.model)
                 self.model_size = "tiny"
                 logger.info("✅ Modelo tiny carregado como último fallback")
             except Exception as e2:
@@ -154,12 +149,11 @@ class OptimizedFasterWhisperTranscriber:
     
     async def transcribe_full_audio(self, audio_path: str) -> str:
         """Transcrição completa otimizada"""
-        model, batched_model = self.load_model()
+        model = self.load_model()
         
         try:
-            segments, info = batched_model.transcribe(
+            segments, info = model.transcribe(
                 audio_path,
-                batch_size=min(8, torch_threads),  # Adaptativo ao número de cores
                 vad_filter=True,  # Remove silêncios automaticamente
                 language="pt",  # Especificar idioma acelera 2x
                 task="transcribe",
@@ -177,7 +171,7 @@ class OptimizedFasterWhisperTranscriber:
     
     async def transcribe_segments(self, audio_path: str, segments: List[Dict]) -> List[str]:
         """Transcrição de segmentos específicos"""
-        model, _ = self.load_model()
+        model = self.load_model()
         
         # Carregar áudio original
         audio_data, sr = librosa.load(audio_path, sr=16000)
@@ -225,16 +219,16 @@ class OptimizedFasterWhisperTranscriber:
         return transcriptions
     
     async def _fallback_transcribe(self, audio_path: str) -> str:
-        """Fallback usando whisper original se disponível"""
+        """Fallback usando whisper original"""
         try:
-            # Tentar whisper original como último recurso
+            logger.info("🔄 Tentando fallback com openai-whisper")
             import whisper
             model = whisper.load_model("base")
             result = model.transcribe(audio_path, language="pt")
             return result["text"]
         except ImportError:
-            logger.warning("⚠️ Whisper original não disponível")
-            return "Erro na transcrição - modelo não disponível."
+            logger.warning("⚠️ OpenAI Whisper não disponível")
+            return "Erro na transcrição - modelos não disponíveis."
         except Exception as e:
             logger.error(f"❌ Fallback whisper falhou: {e}")
             return "Erro na transcrição."
