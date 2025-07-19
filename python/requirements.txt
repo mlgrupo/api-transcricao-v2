@@ -1,33 +1,52 @@
 # ============================================================================
-# SISTEMA DE TRANSCRIÇÃO 100% GRATUITO - DEPENDÊNCIAS OTIMIZADAS
-# Versões testadas e compatíveis para servidor 8 vCPUs + 32GB RAM
+# SISTEMA DE TRANSCRIÇÃO E DIARIZAÇÃO PROFISSIONAL
+# Configuração otimizada para servidor 8 vCPUs + 32GB RAM
+# FOCO: Diarização perfeita usando modelos neurais gratuitos
 # ============================================================================
 
-# CORE ESSENCIAL - sem estas, o sistema não funciona
+# CORE ESSENCIAL - Whisper e processamento básico
 openai-whisper==20231117
 pydub==0.25.1
 numpy==1.24.3
 
-# PROCESSAMENTO DE SINAIS - para diarização inteligente
+# PROCESSAMENTO DE SINAIS AVANÇADO - análise espectral profunda
 scipy==1.11.4
+librosa==0.10.1
+soundfile==0.12.1
 
-# ÁUDIO E MULTIMEDIA - codecs e formatos
-ffmpeg-python==0.2.0
-
-# MACHINE LEARNING BASE - backend do Whisper (versões compatíveis com Docker)
+# MACHINE LEARNING PARA DIARIZAÇÃO - modelos neurais de speaker recognition
 torch==2.1.0
 torchaudio==2.1.0
+transformers==4.35.2
+speechbrain==0.5.16
 
-# PROCESSAMENTO DE ÁUDIO AVANÇADO - qualidade e performance
-soundfile==0.12.1
-librosa==0.10.1
+# CLUSTERING E ANÁLISE ESTATÍSTICA - para agrupamento de speakers
+scikit-learn==1.3.2
+hdbscan==0.8.33
+umap-learn==0.5.4
 
-# UTILITÁRIOS DE SISTEMA - threading e timeouts
+# PROCESSAMENTO PARALELO E OTIMIZAÇÃO - usar todos os 8 cores
+joblib==1.3.2
+multiprocessing-logging==0.3.4
+
+# ÁUDIO E MULTIMEDIA - codecs otimizados
+ffmpeg-python==0.2.0
+
+# ANÁLISE DE EMBEDDING E SIMILARIDADE - comparação de vozes
+faiss-cpu==1.7.4
+cosine-similarity==1.0.1
+
+# VALIDAÇÃO E MÉTRICAS - qualidade da diarização
+pyannote.metrics==3.2.1
+
+# UTILITÁRIOS DE SISTEMA
 typing-extensions==4.8.0
+tqdm==4.66.1
 
-# OPCIONAL - apenas se quiser redução de ruído avançada
-# noisereduce==3.0.0
-
-# DESENVOLVIMENTO E DEBUG - remover em produção se quiser
+# OPCIONAL - visualização para debug (remover em produção)
 # matplotlib==3.7.2
-# jupyter==1.0.0
+# seaborn==0.12.2
+
+# REDUÇÃO DE RUÍDO AVANÇADA - melhora qualidade dos embeddings
+noisereduce==3.0.0
+webrtcvad==2.0.10
