@@ -1,52 +1,44 @@
 # ============================================================================
-# REQUIREMENTS.TXT CORRIGIDO - COMPATIBILIDADE TOTAL
-# Para nikolaik/python-nodejs:python3.11-nodejs18
-# Inclui fallbacks para máxima robustez
+# REQUIREMENTS.TXT SIMPLIFICADO - APENAS O QUE REALMENTE FUNCIONA
+# Foco: Qualidade e confiabilidade ao invés de features complexas
 # ============================================================================
 
-# PYTORCH - Versões estáveis
+# PYTORCH - Base essencial
 torch==2.0.0
 torchaudio==2.0.0
 
-# WHISPER - Faster-Whisper PRIMEIRO, original como fallback
+# WHISPER - Ambos disponíveis para máxima compatibilidade
 faster-whisper==0.10.0
 openai-whisper==20231117
 
-# PROCESSAMENTO DE ÁUDIO - Versões testadas
+# PROCESSAMENTO DE ÁUDIO - Essencial e estável
 pydub==0.25.1
-numpy>=1.21.0,<2.0.0
-scipy>=1.9.0,<2.0.0
-librosa>=0.9.0,<1.0.0
-soundfile>=0.12.0,<1.0.0
+librosa==0.10.1
+soundfile==0.12.1
+numpy==1.24.3
 
-# DIARIZAÇÃO - Resemblyzer versão disponível
-resemblyzer>=0.1.3
+# MACHINE LEARNING - Apenas sklearn (simples e confiável)
+scikit-learn==1.3.0
 
-# VAD - Silero com fallback
-silero-vad>=3.1
-
-# MACHINE LEARNING - sklearn
-scikit-learn>=1.3.0,<2.0.0
-
-# REDUÇÃO DE RUÍDO
-noisereduce>=2.0.0,<4.0.0
-
-# UTILITÁRIOS
-tqdm>=4.60.0,<5.0.0
-typing-extensions>=4.5.0
-packaging>=21.0
-wheel>=0.37.0
+# UTILITÁRIOS BÁSICOS
+tqdm==4.65.0
 
 # ============================================================================
-# PRINCIPAIS CORREÇÕES:
+# REMOVIDO (complexidade desnecessária):
 # ============================================================================
+# 
+# ❌ silero-vad (substituído por análise espectral simples)
+# ❌ resemblyzer (substituído por MFCC + clustering)
+# ❌ scipy (usando apenas sklearn)
+# ❌ noisereduce (preprocessing removido)
+# ❌ typing-extensions (desnecessário)
+# ❌ packaging (desnecessário)
+# ❌ wheel (desnecessário)
 #
-# ✅ ADICIONADO: openai-whisper como fallback
-# ✅ CORRIGIDO: resemblyzer>=0.1.3 (versão disponível)
-# ✅ MANTIDO: faster-whisper como principal
-#
-# AGORA TEM DUPLA PROTEÇÃO:
-# 1. faster-whisper (4x mais rápido)
-# 2. openai-whisper (fallback robusto)
+# RESULTADO:
+# ✅ Menos dependências = menos problemas
+# ✅ Mais simples = mais confiável  
+# ✅ Foco na qualidade da transcrição
+# ✅ Diarização funcional sem complexidade
 #
 # ============================================================================
