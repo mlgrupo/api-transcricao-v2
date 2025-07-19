@@ -1,97 +1,67 @@
 # ============================================================================
-# REQUIREMENTS.TXT - SISTEMA DE TRANSCRIÇÃO E DIARIZAÇÃO COMPATÍVEL
-# Baseado nas melhores práticas 2024-2025 para máxima compatibilidade
-# ORDEM CRÍTICA: Seguir exatamente esta sequência para evitar conflitos
+# REQUIREMENTS.TXT OTIMIZADO - SÓ TROCAR AS DEPENDÊNCIAS PROBLEMÁTICAS
+# Para usar com seu Dockerfile existente (nikolaik/python-nodejs:python3.11-nodejs18)
 # ============================================================================
 
-# ESSENCIAL: PyTorch DEVE ser instalado PRIMEIRO
-# Versão específica para compatibilidade máxima CPU
+# PYTORCH - Versão compatível estável
 torch==2.0.0
 torchaudio==2.0.0
 
-# CORE WHISPER: Faster-Whisper ANTES de qualquer outro Whisper
-# CRÍTICO: faster-whisper deve vir antes de outros engines Whisper
+# WHISPER OTIMIZADO - Troca openai-whisper por faster-whisper (4x mais rápido)
 faster-whisper==0.10.0
 
-# PROCESSAMENTO DE ÁUDIO: Bibliotecas base para manipulação
+# PROCESSAMENTO DE ÁUDIO - Mantém as mesmas versões que funcionam
 pydub==0.25.1
 numpy>=1.21.0,<2.0.0
 scipy>=1.9.0,<2.0.0
 librosa>=0.9.0,<1.0.0
 soundfile>=0.12.0,<1.0.0
 
-# DIARIZAÇÃO: Resemblyzer para embeddings (substitui SpeechBrain problemático)
+# DIARIZAÇÃO - Troca speechbrain por resemblyzer (muito mais compatível)
 resemblyzer==0.1.1
 
-# VAD: Silero VAD para detecção de atividade vocal
-# IMPORTANTE: Instalar diretamente do GitHub para versão mais recente
-# Para instalar: pip install https://github.com/snakers4/silero-vad/archive/master.zip
-# Alternativamente, versão pypi (pode ser mais antiga):
-# silero-vad==3.1
+# VAD - Troca webrtcvad por silero-vad (neural, mais preciso)
+silero-vad>=3.1
 
-# MACHINE LEARNING: sklearn para clustering (substitui HDBSCAN problemático)
+# CLUSTERING - Troca hdbscan por scikit-learn (já deve ter, mais compatível)
 scikit-learn>=1.3.0,<2.0.0
 
-# REDUÇÃO DE RUÍDO: noisereduce otimizado
+# REDUÇÃO DE RUÍDO - Mantém
 noisereduce>=2.0.0,<4.0.0
 
-# PROCESSAMENTO PARALELO: Para usar todos os 8 cores
+# UTILITÁRIOS - Mantém
 tqdm>=4.60.0,<5.0.0
-
-# CODECS DE ÁUDIO: Para suporte completo de formatos
-ffmpeg-python>=0.2.0,<1.0.0
-
-# DEPENDÊNCIAS SISTEMA: Essenciais para funcionamento
 typing-extensions>=4.5.0
 packaging>=21.0
 wheel>=0.37.0
 
-# OPCIONAL - DESCOMENTE SE NECESSÁRIO:
-# Para análise de chunks de áudio mais avançada
-# webrtcvad>=2.0.10,<3.0.0
+# REMOVER do seu requirements.txt atual (se tiver):
+# speechbrain  # ❌ PROBLEMÁTICO
+# hdbscan      # ❌ PROBLEMÁTICO  
+# pyannote-audio # ❌ PROBLEMÁTICO
+# openai-whisper # ❌ Trocar por faster-whisper
+# webrtcvad    # ❌ Trocar por silero-vad
 
-# Para visualização de debug (somente desenvolvimento)
-# matplotlib>=3.5.0,<4.0.0
-
 # ============================================================================
-# INSTRUÇÕES DE INSTALAÇÃO CORRETA:
-# ============================================================================
-# 
-# 1. MÉTODO RECOMENDADO (ordem automática):
-#    pip install -r requirements.txt
-# 
-# 2. INSTALAÇÃO MANUAL (se houver problemas):
-#    pip install torch==2.0.0 torchaudio==2.0.0
-#    pip install faster-whisper==0.10.0
-#    pip install -r requirements.txt
-# 
-# 3. PARA SILERO VAD (se não estiver no PyPI):
-#    pip install https://github.com/snakers4/silero-vad/archive/master.zip
-# 
-# 4. VERIFICAÇÃO PÓS-INSTALAÇÃO:
-#    python -c "import torch, faster_whisper, resemblyzer; print('✅ Instalação OK')"
-#
-# ============================================================================
-# NOTAS DE COMPATIBILIDADE:
+# MUDANÇAS MÍNIMAS NO SEU CÓDIGO PYTHON:
 # ============================================================================
 #
-# ✅ COMPATÍVEL COM:
-# - Python 3.11+
-# - Docker containers
-# - CPU-only environments
-# - Linux/Ubuntu servers
-# - 8 vCPUs + 32GB RAM otimizado
+# 1. WHISPER:
+# ANTES: import whisper
+# DEPOIS: from faster_whisper import WhisperModel
 #
-# ❌ REMOVIDO (problemático):
-# - speechbrain (conflitos de dependências)
-# - hdbscan (problemas de compilação)
-# - pyannote-audio (dependências pesadas)
-# - whisperx (conflitos com faster-whisper)
+# 2. SPEECHBRAIN: 
+# ANTES: from speechbrain.pretrained import EncoderClassifier
+# DEPOIS: from resemblyzer import VoiceEncoder
 #
-# 🔄 SUBSTITUÍDO POR:
-# - speechbrain → resemblyzer (embeddings)
-# - hdbscan → scikit-learn clustering
-# - webrtcvad → silero-vad (neural)
-# - whisper → faster-whisper (4x mais rápido)
+# 3. HDBSCAN:
+# ANTES: import hdbscan
+# DEPOIS: from sklearn.cluster import AgglomerativeClustering
 #
+# 4. WEBRTC VAD:
+# ANTES: import webrtcvad  
+# DEPOIS: import silero_vad
+#
+# ============================================================================
+# SEU DOCKERFILE CONTINUA IGUAL! NÃO MUDA NADA!
 # ============================================================================

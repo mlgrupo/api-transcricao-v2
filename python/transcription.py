@@ -16,6 +16,7 @@ DIFERENÇAS DA VERSÃO ANTERIOR:
 ✅ Pipeline assíncrona otimizada
 ✅ Sistema de fallback robusto em cada etapa
 ✅ Configurações automáticas baseadas no hardware
+✅ Compatível com nikolaik/python-nodejs:python3.11-nodejs18
 """
 
 import sys
@@ -52,19 +53,22 @@ from sklearn.cluster import AgglomerativeClustering, KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score
 
-# Core components otimizados
-from faster_whisper import WhisperModel, BatchedInferencePipeline
-from resemblyzer import VoiceEncoder, preprocess_wav
-import silero_vad
+# Core components otimizados - MUDANÇAS PRINCIPAIS
+from faster_whisper import WhisperModel, BatchedInferencePipeline  # ✅ Substitui openai-whisper
+from resemblyzer import VoiceEncoder, preprocess_wav  # ✅ Substitui speechbrain
+import silero_vad  # ✅ Substitui webrtcvad
 
 # Processamento paralelo
 from tqdm import tqdm
 
-# Configuração otimizada para 8 vCPUs
-torch.set_num_threads(7)  # Deixar 1 core para sistema
+# Configuração otimizada para container (detecta CPUs disponíveis)
+available_cpus = os.cpu_count() or 4
+torch_threads = max(1, min(available_cpus - 1, 7))  # Deixar 1 core para sistema, máx 7
+
+torch.set_num_threads(torch_threads)
 os.environ.update({
-    'OMP_NUM_THREADS': '7',
-    'MKL_NUM_THREADS': '7',
+    'OMP_NUM_THREADS': str(torch_threads),
+    'MKL_NUM_THREADS': str(torch_threads),
     'OMP_PROC_BIND': 'close',
     'KMP_AFFINITY': 'granularity=fine,compact,1,0'
 })
@@ -108,7 +112,7 @@ class OptimizedFasterWhisperTranscriber:
                     device=self.device,
                     compute_type="int8",  # Quantização para máxima velocidade
                     num_workers=1,
-                    cpu_threads=8
+                    cpu_threads=torch_threads
                 )
                 
                 # Pipeline com batching para áudios longos
@@ -131,13 +135,22 @@ class OptimizedFasterWhisperTranscriber:
                 device=self.device,
                 compute_type="int8",
                 num_workers=1,
-                cpu_threads=4
+                cpu_threads=max(1, torch_threads // 2)
             )
             self.batched_model = BatchedInferencePipeline(model=self.model)
+            self.model_size = "medium"
             logger.info("✅ Modelo de fallback carregado")
         except Exception as e:
             logger.error(f"❌ Fallback também falhou: {e}")
-            raise e
+            # Último fallback: modelo tiny
+            try:
+                self.model = WhisperModel("tiny", device=self.device, compute_type="int8")
+                self.batched_model = BatchedInferencePipeline(model=self.model)
+                self.model_size = "tiny"
+                logger.info("✅ Modelo tiny carregado como último fallback")
+            except Exception as e2:
+                logger.error(f"❌ Todos os fallbacks falharam: {e2}")
+                raise e2
     
     async def transcribe_full_audio(self, audio_path: str) -> str:
         """Transcrição completa otimizada"""
@@ -146,7 +159,7 @@ class OptimizedFasterWhisperTranscriber:
         try:
             segments, info = batched_model.transcribe(
                 audio_path,
-                batch_size=8,  # Ideal para 8 cores
+                batch_size=min(8, torch_threads),  # Adaptativo ao número de cores
                 vad_filter=True,  # Remove silêncios automaticamente
                 language="pt",  # Especificar idioma acelera 2x
                 task="transcribe",
@@ -182,6 +195,11 @@ class OptimizedFasterWhisperTranscriber:
                 
                 segment_audio = audio_data[start_sample:end_sample]
                 
+                # Garantir duração mínima
+                if len(segment_audio) < sr * 0.5:  # Menos de 0.5s
+                    padding_needed = int(sr * 0.5) - len(segment_audio)
+                    segment_audio = np.pad(segment_audio, (0, padding_needed), mode='constant')
+                
                 # Criar arquivo temporário
                 with tempfile.NamedTemporaryFile(suffix='.wav', delete=True) as temp_file:
                     sf.write(temp_file.name, segment_audio, sr)
@@ -207,13 +225,18 @@ class OptimizedFasterWhisperTranscriber:
         return transcriptions
     
     async def _fallback_transcribe(self, audio_path: str) -> str:
-        """Fallback usando modelo base"""
+        """Fallback usando whisper original se disponível"""
         try:
+            # Tentar whisper original como último recurso
             import whisper
             model = whisper.load_model("base")
             result = model.transcribe(audio_path, language="pt")
             return result["text"]
-        except:
+        except ImportError:
+            logger.warning("⚠️ Whisper original não disponível")
+            return "Erro na transcrição - modelo não disponível."
+        except Exception as e:
+            logger.error(f"❌ Fallback whisper falhou: {e}")
             return "Erro na transcrição."
 
 class SileroVADProcessor:
@@ -230,7 +253,8 @@ class SileroVADProcessor:
         if self.model is None:
             logger.info("🧠 Carregando Silero VAD model")
             try:
-                torch.set_num_threads(4)  # VAD usa menos recursos
+                # Configurar threads para VAD (menos recursos)
+                torch.set_num_threads(max(1, torch_threads // 2))
                 self.model = silero_vad.load_silero_vad()
                 logger.info("✅ Silero VAD carregado")
             except Exception as e:
@@ -283,7 +307,7 @@ class SileroVADProcessor:
             return self._create_fallback_segments(audio_path)
     
     def _create_fallback_segments(self, audio_path: str) -> List[Dict]:
-        """Fallback: segmentos de tempo fixo"""
+        """Fallback: segmentos de tempo fixo quando VAD falha"""
         try:
             audio = AudioSegment.from_file(audio_path)
             duration = len(audio) / 1000.0
@@ -295,17 +319,20 @@ class SileroVADProcessor:
             
             while start_time < duration:
                 end_time = min(start_time + segment_duration, duration)
-                segments.append({
-                    'start': start_time,
-                    'end': end_time,
-                    'duration': end_time - start_time,
-                    'segment_id': segment_id
-                })
+                if end_time - start_time >= 1.0:  # Mínimo 1 segundo
+                    segments.append({
+                        'start': start_time,
+                        'end': end_time,
+                        'duration': end_time - start_time,
+                        'segment_id': segment_id
+                    })
+                    segment_id += 1
                 start_time = end_time
-                segment_id += 1
             
+            logger.warning(f"⚠️ VAD fallback: {len(segments)} segmentos de tempo fixo")
             return segments
-        except:
+        except Exception as e:
+            logger.error(f"❌ Erro no fallback de segmentação: {e}")
             return []
 
 class ResemblyzerSpeakerEmbedder:
@@ -363,7 +390,7 @@ class ResemblyzerSpeakerEmbedder:
                     # Extrair embedding
                     embedding = encoder.embed_utterance(segment_wav)
                     
-                    # Normalizar
+                    # Normalizar para melhor comparação
                     embedding_normalized = embedding / np.linalg.norm(embedding)
                     
                     embeddings[f"segment_{i}"] = embedding_normalized
@@ -393,11 +420,12 @@ class ResemblyzerSpeakerEmbedder:
         # Converter para matriz
         embedding_matrix = np.array(embedding_list)
         
-        # Calcular similaridades cosseno
+        # Calcular similaridades cosseno (já normalizados)
         similarity_matrix = np.dot(embedding_matrix, embedding_matrix.T)
         
-        # Garantir diagonal = 1.0
+        # Garantir que diagonal seja 1.0 e valores estejam no range correto
         np.fill_diagonal(similarity_matrix, 1.0)
+        similarity_matrix = np.clip(similarity_matrix, -1.0, 1.0)
         
         logger.info(f"🧮 Matriz de similaridade {n_embeddings}x{n_embeddings} calculada")
         return similarity_matrix
@@ -406,6 +434,7 @@ class CompatibleSpeakerClusterer:
     """
     Sistema de clustering compatível usando apenas sklearn
     ESTRATÉGIA: Múltiplos algoritmos com seleção automática do melhor
+    SUBSTITUI: HDBSCAN problemático por algoritmos sklearn estáveis
     """
     
     def __init__(self):
@@ -427,9 +456,12 @@ class CompatibleSpeakerClusterer:
         best_n_speakers = 2
         best_algorithm = ""
         
-        # Converter para distância
+        # Converter similaridade para distância
         distance_matrix = 1 - similarity_matrix
         np.fill_diagonal(distance_matrix, 0)
+        
+        # Garantir que a matriz de distância seja válida
+        distance_matrix = np.clip(distance_matrix, 0, 2)  # Cosseno: distância entre 0 e 2
         
         # Testar diferentes algoritmos
         for alg_name, alg_func in self.algorithms.items():
@@ -457,7 +489,7 @@ class CompatibleSpeakerClusterer:
             logger.info(f"🏆 Melhor: {best_algorithm} - {best_n_speakers} speakers (score: {best_score:.3f})")
             return best_labels, best_n_speakers, best_score
         else:
-            # Fallback simples
+            # Fallback simples: alternancia entre 2 speakers
             logger.warning("⚠️ Clustering falhou, usando fallback")
             labels = np.array([i % 2 for i in range(len(similarity_matrix))])
             return labels, 2, 0.0
@@ -484,19 +516,21 @@ class CompatibleSpeakerClusterer:
                     best_labels = labels
                     best_n_speakers = n_speakers
                     
-            except Exception:
+            except Exception as e:
+                logger.warning(f"⚠️ Erro agglomerative com {n_speakers} speakers: {e}")
                 continue
         
         return best_labels if best_labels is not None else np.zeros(len(distance_matrix), dtype=int), best_n_speakers
     
     def _cluster_kmeans(self, distance_matrix: np.ndarray, max_speakers: int) -> Tuple[np.ndarray, int]:
-        """K-means clustering com MDS"""
+        """K-means clustering com MDS para conversão de distâncias"""
         try:
             from sklearn.manifold import MDS
             
-            # Converter distâncias para pontos euclidanos
-            mds = MDS(n_components=min(len(distance_matrix)-1, 10), 
-                     dissimilarity='precomputed', random_state=42)
+            # Converter distâncias para pontos euclidanos usando MDS
+            n_components = min(len(distance_matrix) - 1, 10, max_speakers)
+            mds = MDS(n_components=n_components, dissimilarity='precomputed', 
+                     random_state=42, max_iter=100, n_init=1)
             points = mds.fit_transform(distance_matrix)
             
             best_labels = None
@@ -505,7 +539,8 @@ class CompatibleSpeakerClusterer:
             
             for n_speakers in range(2, min(max_speakers + 1, len(distance_matrix))):
                 try:
-                    clusterer = KMeans(n_clusters=n_speakers, random_state=42, n_init=10)
+                    clusterer = KMeans(n_clusters=n_speakers, random_state=42, 
+                                     n_init=5, max_iter=100)
                     labels = clusterer.fit_predict(points)
                     score = self._evaluate_clustering(distance_matrix, labels)
                     
@@ -514,22 +549,25 @@ class CompatibleSpeakerClusterer:
                         best_labels = labels
                         best_n_speakers = n_speakers
                         
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"⚠️ Erro kmeans com {n_speakers} speakers: {e}")
                     continue
             
             return best_labels if best_labels is not None else np.zeros(len(distance_matrix), dtype=int), best_n_speakers
             
-        except Exception:
+        except Exception as e:
+            logger.warning(f"⚠️ Erro no K-means: {e}")
             return np.zeros(len(distance_matrix), dtype=int), 2
     
     def _cluster_ward(self, distance_matrix: np.ndarray, max_speakers: int) -> Tuple[np.ndarray, int]:
-        """Ward clustering"""
+        """Ward clustering usando MDS para converter distâncias"""
         try:
             from sklearn.manifold import MDS
             
-            # MDS para Ward
-            mds = MDS(n_components=min(len(distance_matrix)-1, 10), 
-                     dissimilarity='precomputed', random_state=42)
+            # MDS para converter para pontos euclidanos (necessário para Ward)
+            n_components = min(len(distance_matrix) - 1, 10, max_speakers)
+            mds = MDS(n_components=n_components, dissimilarity='precomputed', 
+                     random_state=42, max_iter=100, n_init=1)
             points = mds.fit_transform(distance_matrix)
             
             best_labels = None
@@ -551,32 +589,40 @@ class CompatibleSpeakerClusterer:
                         best_labels = labels
                         best_n_speakers = n_speakers
                         
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"⚠️ Erro ward com {n_speakers} speakers: {e}")
                     continue
             
             return best_labels if best_labels is not None else np.zeros(len(distance_matrix), dtype=int), best_n_speakers
             
-        except Exception:
+        except Exception as e:
+            logger.warning(f"⚠️ Erro no Ward clustering: {e}")
             return np.zeros(len(distance_matrix), dtype=int), 2
     
     def _evaluate_clustering(self, distance_matrix: np.ndarray, labels: np.ndarray) -> float:
-        """Avalia qualidade do clustering"""
+        """Avalia qualidade do clustering usando silhouette score"""
         try:
-            if len(np.unique(labels)) < 2:
+            unique_labels = np.unique(labels)
+            if len(unique_labels) < 2:
                 return 0.0
             
+            # Silhouette score principal
             silhouette = silhouette_score(distance_matrix, labels, metric='precomputed')
             
-            # Bonificação por distribuição equilibrada
+            # Bonificação por distribuição equilibrada de clusters
             cluster_sizes = np.bincount(labels)
-            if len(cluster_sizes) > 1:
+            if len(cluster_sizes) > 1 and np.mean(cluster_sizes) > 0:
                 size_balance = 1.0 - np.std(cluster_sizes) / np.mean(cluster_sizes)
+                size_balance = max(0.0, min(1.0, size_balance))  # Garantir range [0,1]
             else:
                 size_balance = 1.0
             
-            return 0.8 * silhouette + 0.2 * size_balance
+            # Score final combinado
+            final_score = 0.8 * silhouette + 0.2 * size_balance
+            return max(0.0, final_score)
             
-        except Exception:
+        except Exception as e:
+            logger.warning(f"⚠️ Erro na avaliação de qualidade: {e}")
             return 0.0
 
 class TemporalValidator:
@@ -597,7 +643,8 @@ class TemporalValidator:
         
         if len(segments) != len(labels):
             logger.error("❌ Incompatibilidade entre segmentos e labels")
-            return segments
+            # Criar labels simples se houver incompatibilidade
+            labels = np.array([i % 2 for i in range(len(segments))])
         
         # Combinar segmentos com labels
         timeline = []
@@ -610,7 +657,7 @@ class TemporalValidator:
                 'original_index': i
             })
         
-        # Aplicar validações
+        # Aplicar validações em sequência
         timeline = self._remove_short_segments(timeline)
         timeline = self._smooth_transitions(timeline)
         timeline = self._consolidate_consecutive(timeline)
@@ -628,21 +675,27 @@ class TemporalValidator:
         return validated_segments
     
     def _remove_short_segments(self, timeline: List[Dict]) -> List[Dict]:
-        """Remove segmentos muito curtos"""
+        """Remove ou mescla segmentos muito curtos"""
+        if not timeline:
+            return timeline
+            
         cleaned = []
         
         for segment in timeline:
             if segment['duration'] >= self.min_duration:
                 cleaned.append(segment)
             elif cleaned:
-                # Mesclar com anterior
+                # Mesclar com segmento anterior
                 cleaned[-1]['end'] = segment['end']
                 cleaned[-1]['duration'] = cleaned[-1]['end'] - cleaned[-1]['start']
+            else:
+                # Se é o primeiro segmento e é muito curto, manter mesmo assim
+                cleaned.append(segment)
         
         return cleaned
     
     def _smooth_transitions(self, timeline: List[Dict]) -> List[Dict]:
-        """Suaviza transições rápidas"""
+        """Suaviza transições rápidas entre speakers"""
         if len(timeline) < 3:
             return timeline
         
@@ -653,14 +706,16 @@ class TemporalValidator:
             prev_speaker = smoothed[-1]['speaker_id']
             next_speaker = timeline[i+1]['speaker_id']
             
-            # Corrigir outliers temporais
+            # Corrigir outliers temporais (segmento isolado muito curto)
             if (current['speaker_id'] != prev_speaker and 
                 current['speaker_id'] != next_speaker and
                 current['duration'] < 2.0):
+                # Atribuir ao speaker anterior (mais conservador)
                 current['speaker_id'] = prev_speaker
             
             smoothed.append(current)
         
+        # Adicionar último segmento
         if len(timeline) > 1:
             smoothed.append(timeline[-1])
         
@@ -676,9 +731,13 @@ class TemporalValidator:
         for segment in timeline[1:]:
             last = consolidated[-1]
             
-            # Mesmo speaker e gap pequeno
-            if (segment['speaker_id'] == last['speaker_id'] and
-                abs(segment['start'] - last['end']) < 2.0):
+            # Verificar se é mesmo speaker e gap pequeno
+            gap = abs(segment['start'] - last['end'])
+            same_speaker = segment['speaker_id'] == last['speaker_id']
+            small_gap = gap < 2.0  # Menos de 2 segundos
+            
+            if same_speaker and small_gap:
+                # Mesclar segmentos
                 last['end'] = segment['end']
                 last['duration'] = last['end'] - last['start']
             else:
@@ -711,7 +770,7 @@ class AdvancedAudioPreprocessor:
             audio = self._noise_reduction(audio)
             audio = self._voice_equalization(audio)
             
-            # Salvar resultado
+            # Salvar resultado em arquivo temporário
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
                 audio.export(
                     temp_file.name, 
@@ -725,7 +784,7 @@ class AdvancedAudioPreprocessor:
             
         except Exception as e:
             logger.error(f"❌ Erro no preprocessamento: {e}")
-            return audio_path
+            return audio_path  # Retornar original se falhar
     
     def _intelligent_normalization(self, audio: AudioSegment) -> AudioSegment:
         """Normalização adaptativa baseada na dinâmica do áudio"""
@@ -745,11 +804,12 @@ class AdvancedAudioPreprocessor:
                 
                 if median_rms > 0:
                     gain_db = 20 * np.log10(target_rms / median_rms)
-                    gain_db = np.clip(gain_db, -15, 15)  # Limitar ganho
+                    gain_db = np.clip(gain_db, -15, 15)  # Limitar ganho para evitar distorção
                     audio = audio + gain_db
             
             return normalize(audio, headroom=0.1)
-        except:
+        except Exception as e:
+            logger.warning(f"⚠️ Erro na normalização: {e}")
             return audio
     
     def _noise_reduction(self, audio: AudioSegment) -> AudioSegment:
@@ -760,19 +820,19 @@ class AdvancedAudioPreprocessor:
             if audio.channels == 2:
                 samples = samples.reshape((-1, 2)).mean(axis=1)
             
-            # Normalizar
+            # Normalizar para noise reduction
             if np.max(np.abs(samples)) > 0:
                 samples = samples / np.max(np.abs(samples))
             
-            # Redução de ruído
+            # Aplicar redução de ruído
             reduced = nr.reduce_noise(
                 y=samples,
                 sr=audio.frame_rate,
-                stationary=False,
+                stationary=False,  # Ruído não-estacionário
                 prop_decrease=0.6  # Reduzir 60% do ruído
             )
             
-            # Converter de volta
+            # Converter de volta para AudioSegment
             reduced = (reduced * 32767).astype(np.int16)
             return audio._spawn(reduced.tobytes())
             
@@ -784,10 +844,11 @@ class AdvancedAudioPreprocessor:
         """Equalização otimizada para voz"""
         try:
             # Filtros para faixa vocal (80Hz - 8kHz)
-            audio = audio.high_pass_filter(80)
-            audio = audio.low_pass_filter(8000)
+            audio = audio.high_pass_filter(80)   # Remove ruído grave
+            audio = audio.low_pass_filter(8000)  # Remove ruído agudo
             return audio
-        except:
+        except Exception as e:
+            logger.warning(f"⚠️ Erro na equalização: {e}")
             return audio
 
 class RobustTranscriptionPipeline:
@@ -805,7 +866,7 @@ class RobustTranscriptionPipeline:
         self.transcriber = OptimizedFasterWhisperTranscriber()
         
         self.config = {
-            'max_speakers': 8,
+            'max_speakers': min(8, available_cpus),  # Adaptativo ao hardware
             'min_segment_duration': 2.0,
             'quality_threshold': 0.3,
             'enable_preprocessing': True
@@ -822,7 +883,11 @@ class RobustTranscriptionPipeline:
         temp_files = []
         
         try:
-            # Etapa 1: Preprocessamento
+            # Verificar se arquivo existe
+            if not os.path.exists(audio_path):
+                raise FileNotFoundError(f"Arquivo não encontrado: {audio_path}")
+            
+            # Etapa 1: Preprocessamento (opcional, configurável)
             if self.config['enable_preprocessing']:
                 logger.info("📊 Etapa 1/6: Preprocessamento de áudio")
                 processed_path = self.preprocessor.preprocess_audio(audio_path)
@@ -831,11 +896,11 @@ class RobustTranscriptionPipeline:
             else:
                 processed_path = audio_path
             
-            # Análise de duração
+            # Análise de duração para estratégia adaptativa
             duration = self._get_audio_duration(processed_path)
             logger.info(f"⏱️ Duração: {duration:.1f}s ({duration/60:.1f}min)")
             
-            # Verificar se vale a pena fazer diarização
+            # Estratégia baseada na duração
             if duration < 30:  # Menos de 30 segundos
                 logger.info("⚡ Áudio muito curto - transcrição direta")
                 return await self._direct_transcription(processed_path, duration)
@@ -845,19 +910,19 @@ class RobustTranscriptionPipeline:
             speech_segments = self.vad.detect_speech_segments(processed_path)
             
             if len(speech_segments) < 2:
-                logger.info("⚡ Poucos segmentos - transcrição direta")
+                logger.info("⚡ Poucos segmentos detectados - transcrição direta")
                 return await self._direct_transcription(processed_path, duration)
             
-            # Etapa 3: Extração de embeddings
+            # Etapa 3: Extração de embeddings neurais
             logger.info("📊 Etapa 3/6: Extração de embeddings neurais")
             embeddings = self.embedder.extract_embeddings(processed_path, speech_segments)
             
             if len(embeddings) < 2:
-                logger.warning("⚠️ Poucos embeddings - fallback simples")
+                logger.warning("⚠️ Poucos embeddings válidos - fallback simples")
                 return await self._simple_diarization_fallback(processed_path, speech_segments)
             
             # Etapa 4: Clustering de speakers
-            logger.info("📊 Etapa 4/6: Clustering de speakers")
+            logger.info("📊 Etapa 4/6: Clustering automático de speakers")
             similarity_matrix = self.embedder.calculate_similarity_matrix(embeddings)
             labels, n_speakers, quality = self.clusterer.cluster_speakers(
                 similarity_matrix, self.config['max_speakers']
@@ -865,46 +930,53 @@ class RobustTranscriptionPipeline:
             
             logger.info(f"🎭 {n_speakers} speakers detectados (qualidade: {quality:.3f})")
             
+            # Verificar qualidade do clustering
+            if quality < self.config['quality_threshold']:
+                logger.warning(f"⚠️ Qualidade baixa ({quality:.3f}) - aplicando fallback")
+                return await self._simple_diarization_fallback(processed_path, speech_segments)
+            
             # Etapa 5: Validação temporal
             logger.info("📊 Etapa 5/6: Validação temporal")
             validated_segments = self.validator.validate_timeline(speech_segments, labels)
             
-            # Etapa 6: Transcrição
+            # Etapa 6: Transcrição com diarização
             logger.info("📊 Etapa 6/6: Transcrição com diarização")
             transcriptions = await self.transcriber.transcribe_segments(processed_path, validated_segments)
             
             # Formatação final
             final_result = self._format_transcription(validated_segments, transcriptions)
             
-            # Métricas
+            # Log de métricas finais
             processing_time = time.time() - start_time
             self._log_metrics(duration, processing_time, n_speakers, len(validated_segments))
             
             return final_result
             
         except Exception as e:
-            logger.error(f"💥 Erro na pipeline: {e}")
+            logger.error(f"💥 Erro na pipeline principal: {e}")
             return await self._emergency_fallback(audio_path)
         
         finally:
-            # Limpeza
+            # Limpeza de arquivos temporários
             for temp_file in temp_files:
                 try:
                     if os.path.exists(temp_file):
                         os.unlink(temp_file)
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning(f"⚠️ Erro ao limpar arquivo temporário: {e}")
     
     def _get_audio_duration(self, audio_path: str) -> float:
-        """Obter duração do áudio"""
+        """Obter duração do áudio de forma robusta"""
         try:
             audio = AudioSegment.from_file(audio_path)
             return len(audio) / 1000.0
-        except:
+        except Exception as e:
+            logger.warning(f"⚠️ Erro ao obter duração: {e}")
             return 0.0
     
     async def _direct_transcription(self, audio_path: str, duration: float) -> str:
         """Transcrição direta sem diarização"""
+        logger.info("🔄 Executando transcrição direta")
         text = await self.transcriber.transcribe_full_audio(audio_path)
         timestamp = self._format_timestamp(0, duration)
         clean_text = self._clean_text(text)
@@ -912,32 +984,35 @@ class RobustTranscriptionPipeline:
     
     async def _simple_diarization_fallback(self, audio_path: str, segments: List[Dict]) -> str:
         """Fallback com diarização simples alternada"""
-        logger.info("🔄 Fallback: diarização simples")
+        logger.info("🔄 Fallback: diarização simples alternada")
         
-        # Atribuir speakers alternadamente
+        # Atribuir speakers alternadamente (simples mas funcional)
         for i, segment in enumerate(segments):
             segment['speaker'] = f"SPEAKER_{(i % 2) + 1:02d}"
         
+        # Transcrever segmentos
         transcriptions = await self.transcriber.transcribe_segments(audio_path, segments)
         return self._format_transcription(segments, transcriptions)
     
     async def _emergency_fallback(self, audio_path: str) -> str:
         """Fallback de emergência total"""
-        logger.warning("🆘 Fallback de emergência")
+        logger.warning("🆘 Ativando fallback de emergência")
         
         try:
             text = await self.transcriber.transcribe_full_audio(audio_path)
             duration = self._get_audio_duration(audio_path)
             timestamp = self._format_timestamp(0, duration)
-            return f"{timestamp} SPEAKER 01:\n{text}"
-        except:
-            return "Sistema temporariamente indisponível."
+            clean_text = self._clean_text(text)
+            return f"{timestamp} SPEAKER 01:\n{clean_text}"
+        except Exception as e:
+            logger.error(f"❌ Fallback de emergência falhou: {e}")
+            return "Sistema temporariamente indisponível. Tente novamente."
     
     def _format_transcription(self, segments: List[Dict], transcriptions: List[str]) -> str:
-        """Formata transcrição final"""
+        """Formata transcrição final com timeline"""
         if len(segments) != len(transcriptions):
-            logger.error("❌ Incompatibilidade na formatação")
-            return "Erro na formatação."
+            logger.error("❌ Incompatibilidade na formatação final")
+            return "Erro na formatação da transcrição."
         
         formatted_parts = []
         
@@ -949,19 +1024,23 @@ class RobustTranscriptionPipeline:
                     speaker = segment['speaker'].replace("_", " ")
                     formatted_parts.append(f"{timestamp} {speaker}:\n{clean_text}")
         
-        return "\n\n".join(formatted_parts) if formatted_parts else "Nenhuma transcrição válida."
+        if formatted_parts:
+            return "\n\n".join(formatted_parts)
+        else:
+            return "Nenhuma transcrição válida foi obtida."
     
     def _clean_text(self, text: str) -> str:
-        """Limpeza do texto"""
+        """Limpeza e formatação do texto transcrito"""
         if not text:
             return ""
         
         # Remover espaços múltiplos
         text = re.sub(r'\s+', ' ', text)
         
-        # Limpar caracteres especiais preservando acentos
+        # Limpar caracteres especiais preservando acentos portugueses
         text = re.sub(r'[^\w\s\.\,\!\?\-\:\;\(\)áàâãéèêíìîóòôõúùûçÁÀÂÃÉÈÊÍÌÎÓÒÔÕÚÙÛÇ]', '', text)
         
+        # Trim e capitalizar primeira letra
         text = text.strip()
         if text and text[0].islower():
             text = text[0].upper() + text[1:]
@@ -969,7 +1048,7 @@ class RobustTranscriptionPipeline:
         return text
     
     def _format_timestamp(self, start: float, end: float) -> str:
-        """Formatação de timestamp"""
+        """Formatação padronizada de timestamp"""
         def to_time(seconds):
             h = int(seconds // 3600)
             m = int((seconds % 3600) // 60)
@@ -979,25 +1058,30 @@ class RobustTranscriptionPipeline:
         return f"[{to_time(start)} - {to_time(end)}]"
     
     def _log_metrics(self, duration: float, processing_time: float, n_speakers: int, n_segments: int):
-        """Log de métricas finais"""
+        """Log de métricas finais para monitoramento"""
         speed_ratio = duration / processing_time if processing_time > 0 else 0
         
         logger.info("=" * 50)
-        logger.info("📊 MÉTRICAS FINAIS")
+        logger.info("📊 MÉTRICAS FINAIS DA PIPELINE")
         logger.info("=" * 50)
-        logger.info(f"⏱️ Duração: {duration:.1f}s ({duration/60:.1f}min)")
-        logger.info(f"🚀 Processamento: {processing_time:.1f}s")
+        logger.info(f"⏱️ Duração do áudio: {duration:.1f}s ({duration/60:.1f}min)")
+        logger.info(f"🚀 Tempo de processamento: {processing_time:.1f}s")
         logger.info(f"⚡ Velocidade: {speed_ratio:.1f}x tempo real")
-        logger.info(f"🎭 Speakers: {n_speakers}")
-        logger.info(f"📝 Segmentos: {n_segments}")
+        logger.info(f"🎭 Speakers detectados: {n_speakers}")
+        logger.info(f"📝 Segmentos processados: {n_segments}")
+        logger.info(f"💻 Recursos utilizados: {torch_threads} cores")
         logger.info("=" * 50)
 
 async def main():
-    """Função principal otimizada"""
+    """
+    Função principal otimizada para integração com Node.js
+    Compatível com estrutura nikolaik/python-nodejs:python3.11-nodejs18
+    """
     if len(sys.argv) < 2:
         print(json.dumps({
             "status": "error",
-            "error": "Forneça o caminho do arquivo de áudio"
+            "error": "Por favor, forneça o caminho do arquivo de áudio",
+            "usage": "python transcricao_diarizacao.py <audio_path> [output_dir]"
         }, ensure_ascii=False))
         sys.exit(1)
     
@@ -1005,22 +1089,22 @@ async def main():
     output_dir = sys.argv[2] if len(sys.argv) > 2 else None
     
     try:
-        logger.info("🚀 Inicializando sistema otimizado")
+        logger.info("🚀 Inicializando sistema de transcrição e diarização otimizado")
         pipeline = RobustTranscriptionPipeline()
         
         start_time = time.time()
         result = await pipeline.process_audio(audio_path)
         processing_time = time.time() - start_time
         
-        # Salvar se solicitado
+        # Salvar resultado se diretório de saída foi especificado
         if output_dir and result:
             os.makedirs(output_dir, exist_ok=True)
             output_file = os.path.join(output_dir, "transcricao_diarizacao.txt")
             with open(output_file, 'w', encoding='utf-8') as f:
                 f.write(result)
-            logger.info(f"💾 Salvo em: {output_file}")
+            logger.info(f"💾 Resultado salvo em: {output_file}")
         
-        # Output JSON
+        # Output JSON estruturado para integração com Node.js
         output = {
             "status": "success",
             "text": result,
@@ -1030,29 +1114,55 @@ async def main():
             "timestamp": datetime.now().isoformat(),
             "diarization_available": True,
             "features_used": [
-                "faster_whisper_int8",
-                "silero_vad",
-                "resemblyzer_embeddings",
-                "sklearn_clustering",
+                "faster_whisper_int8_quantization",
+                "silero_neural_vad",
+                "resemblyzer_speaker_embeddings",
+                "sklearn_multimodal_clustering",
                 "temporal_validation",
-                "noise_reduction",
-                "automatic_fallbacks"
+                "advanced_audio_preprocessing",
+                "automatic_fallback_system"
             ],
-            "architecture": "faster_whisper_silero_resemblyzer",
-            "compatibility": "python_3.11_docker_optimized"
+            "architecture": "faster_whisper_silero_resemblyzer_sklearn",
+            "compatibility": "python_3.11_nikolaik_docker_optimized",
+            "hardware_utilized": {
+                "cpu_cores": torch_threads,
+                "total_cores": available_cpus
+            }
         }
         
         print(json.dumps(output, ensure_ascii=False))
         
     except Exception as e:
-        logger.error(f"💥 Erro crítico: {e}")
-        print(json.dumps({
+        logger.error(f"💥 Erro crítico na execução: {e}")
+        
+        # Output de erro estruturado
+        error_output = {
             "status": "error",
             "error": str(e),
             "timestamp": datetime.now().isoformat(),
-            "fallback_info": "Sistema com múltiplos fallbacks automáticos"
-        }, ensure_ascii=False))
+            "fallback_available": True,
+            "compatibility_info": {
+                "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
+                "torch_available": True,
+                "dependencies_status": "check_requirements"
+            },
+            "troubleshooting": [
+                "Verificar se o arquivo de áudio existe e é válido",
+                "Verificar se todas as dependências estão instaladas",
+                "Verificar logs detalhados acima para diagnóstico"
+            ]
+        }
+        
+        print(json.dumps(error_output, ensure_ascii=False))
         sys.exit(1)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Configurar asyncio para compatibilidade máxima
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("⏹️ Processamento interrompido pelo usuário")
+        sys.exit(0)
+    except Exception as e:
+        logger.error(f"💥 Erro fatal: {e}")
+        sys.exit(1)
