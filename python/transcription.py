@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-SISTEMA DE TRANSCRIÇÃO SIMPLES E EFICAZ
-======================================
-FOCO: Qualidade ao invés de complexidade
-ESTRATÉGIA: Menos fallbacks, mais precisão
+SISTEMA DE TRANSCRIÇÃO SIMPLES E EFICAZ - VERSÃO MELHORADA
+========================================================
+FOCO: Qualidade ao invés de complexidade + Diarização Avançada
+ESTRATÉGIA: pyannote.audio + fallbacks inteligentes
 """
 
 import sys
@@ -47,6 +47,14 @@ try:
 except ImportError:
     OPENAI_WHISPER_AVAILABLE = False
 
+# === NOVA ADIÇÃO: pyannote.audio para diarização de alta qualidade ===
+try:
+    from pyannote.audio import Pipeline, Audio
+    from pyannote.core import Segment, Annotation
+    PYANNOTE_AVAILABLE = True
+except ImportError:
+    PYANNOTE_AVAILABLE = False
+
 # Configuração simples
 torch.set_num_threads(4)
 os.environ['OMP_NUM_THREADS'] = '4'
@@ -60,9 +68,159 @@ def setup_simple_logging():
 
 logger = setup_simple_logging()
 
+class AdvancedSpeakerDiarizer:
+    """
+    Diarização avançada usando pyannote.audio + fallback para sistema simples
+    FOCO: Máxima qualidade de diarização
+    """
+    
+    def __init__(self, max_speakers=6):
+        self.max_speakers = max_speakers
+        self.pyannote_pipeline = None
+        self.audio_loader = None
+        self.fallback_diarizer = SimpleSpeakerDiarization(max_speakers)
+        
+        # Tentar carregar pyannote.audio
+        self._load_pyannote()
+    
+    def _load_pyannote(self):
+        """Carrega pipeline pyannote.audio se disponível"""
+        if not PYANNOTE_AVAILABLE:
+            logger.info("📊 pyannote.audio não disponível - usando diarização simples")
+            return
+        
+        hf_token = os.environ.get('HUGGINGFACE_TOKEN')
+        if not hf_token:
+            logger.info("📊 Token HF não encontrado - usando diarização simples")
+            return
+        
+        try:
+            logger.info("🚀 Carregando pyannote.audio...")
+            
+            # Tentar modelos em ordem de preferência
+            models_to_try = [
+                "pyannote/speaker-diarization-3.1",
+                "pyannote/speaker-diarization-3.0", 
+                "pyannote/speaker-diarization@2.1"
+            ]
+            
+            for model_name in models_to_try:
+                try:
+                    self.pyannote_pipeline = Pipeline.from_pretrained(
+                        model_name, 
+                        use_auth_token=hf_token
+                    )
+                    
+                    # Mover para GPU se disponível
+                    if torch.cuda.is_available():
+                        self.pyannote_pipeline = self.pyannote_pipeline.to(torch.device("cuda"))
+                        logger.info("🔥 Pipeline movido para GPU")
+                    
+                    self.audio_loader = Audio(sample_rate=16000, mono=True)
+                    logger.info(f"✅ pyannote.audio carregado: {model_name}")
+                    return
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Erro ao carregar {model_name}: {e}")
+                    continue
+            
+            logger.info("📊 Fallback para diarização simples")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Erro geral pyannote: {e}")
+    
+    def detect_speakers(self, audio_path: str) -> List[Dict]:
+        """
+        Detecta speakers usando pyannote.audio ou fallback simples
+        RETORNA: Lista de segmentos com speaker_id
+        """
+        logger.info("🎭 Iniciando diarização avançada de speakers")
+        
+        # Tentar pyannote.audio primeiro
+        if self.pyannote_pipeline:
+            try:
+                return self._detect_with_pyannote(audio_path)
+            except Exception as e:
+                logger.warning(f"⚠️ pyannote falhou: {e}")
+        
+        # Fallback para sistema simples
+        logger.info("📊 Usando diarização simples como fallback")
+        return self.fallback_diarizer.detect_speakers(audio_path)
+    
+    def _detect_with_pyannote(self, audio_path: str) -> List[Dict]:
+        """Diarização usando pyannote.audio"""
+        logger.info("🎯 Executando diarização com pyannote.audio...")
+        
+        # Executar diarização
+        diarization_params = {}
+        if self.max_speakers <= 4:
+            diarization_params["max_speakers"] = self.max_speakers
+        else:
+            diarization_params["min_speakers"] = 1
+            diarization_params["max_speakers"] = self.max_speakers
+        
+        diarization = self.pyannote_pipeline(audio_path, **diarization_params)
+        
+        # Converter para formato compatível
+        segments = []
+        speaker_mapping = {}
+        speaker_counter = 0
+        
+        for segment, _, speaker in diarization.itertracks(yield_label=True):
+            # Mapear speaker para ID numérico
+            if speaker not in speaker_mapping:
+                speaker_mapping[speaker] = speaker_counter
+                speaker_counter += 1
+            
+            segments.append({
+                'start': segment.start,
+                'end': segment.end,
+                'duration': segment.end - segment.start,
+                'speaker_id': speaker_mapping[speaker],
+                'speaker': f"SPEAKER_{speaker_mapping[speaker] + 1:02d}"
+            })
+        
+        # Consolidar segmentos próximos
+        consolidated = self._consolidate_segments(segments)
+        
+        n_speakers = len(set(s['speaker_id'] for s in consolidated))
+        logger.info(f"✅ pyannote.audio: {n_speakers} speakers detectados, {len(consolidated)} segmentos")
+        
+        return consolidated
+    
+    def _consolidate_segments(self, segments: List[Dict]) -> List[Dict]:
+        """Consolida segmentos consecutivos do mesmo speaker"""
+        if not segments:
+            return segments
+        
+        # Ordenar por tempo
+        segments = sorted(segments, key=lambda x: x['start'])
+        
+        consolidated = []
+        current_segment = segments[0].copy()
+        
+        for next_segment in segments[1:]:
+            # Se mesmo speaker e gap pequeno (< 2 segundos)
+            if (next_segment['speaker_id'] == current_segment['speaker_id'] and
+                next_segment['start'] - current_segment['end'] < 2.0):
+                # Estender segmento atual
+                current_segment['end'] = next_segment['end']
+                current_segment['duration'] = current_segment['end'] - current_segment['start']
+            else:
+                # Salvar segmento atual e começar novo
+                if current_segment['duration'] >= 0.5:  # Mínimo 0.5 segundo
+                    consolidated.append(current_segment)
+                current_segment = next_segment.copy()
+        
+        # Adicionar último segmento
+        if current_segment['duration'] >= 0.5:
+            consolidated.append(current_segment)
+        
+        return consolidated
+
 class SimpleWhisperTranscriber:
     """
-    Transcritor simples mas eficaz
+    Transcritor simples mas eficaz - MANTIDO COMO ESTAVA
     FOCO: Precisão sem repetições
     """
     
@@ -187,8 +345,8 @@ class SimpleWhisperTranscriber:
 
 class SimpleSpeakerDiarization:
     """
-    Diarização simples baseada em características espectrais
-    FOCO: Detectar mais speakers corretamente
+    Diarização simples baseada em características espectrais - SISTEMA ORIGINAL
+    FOCO: Detectar mais speakers corretamente (usado como fallback)
     """
     
     def __init__(self, max_speakers=6):
@@ -199,7 +357,7 @@ class SimpleSpeakerDiarization:
         Detecta speakers usando características espectrais simples
         RETORNA: Lista de segmentos com speaker_id
         """
-        logger.info("🎭 Iniciando diarização de speakers")
+        logger.info("🎭 Iniciando diarização simples de speakers")
         
         try:
             # Carregar áudio
@@ -386,13 +544,13 @@ class SimpleSpeakerDiarization:
 
 class SmartTranscriptionPipeline:
     """
-    Pipeline inteligente mas simples
-    FOCO: Qualidade e precisão
+    Pipeline inteligente mas simples - MELHORADO
+    FOCO: Qualidade e precisão com diarização avançada
     """
     
     def __init__(self):
         self.transcriber = SimpleWhisperTranscriber()
-        self.diarizer = SimpleSpeakerDiarization()
+        self.diarizer = AdvancedSpeakerDiarizer()  # MUDANÇA: Usar diarizador avançado
         
     async def process_audio(self, audio_path: str) -> str:
         """Pipeline completa otimizada"""
@@ -417,8 +575,8 @@ class SmartTranscriptionPipeline:
             
             elif duration < 120:
                 # Áudio médio - diarização simples
-                logger.info("🎭 Áudio médio - diarização simples")
-                return await self._process_with_simple_diarization(audio_path)
+                logger.info("🎭 Áudio médio - diarização avançada")
+                return await self._process_with_advanced_diarization(audio_path)
             
             else:
                 # Áudio longo - diarização completa
@@ -439,8 +597,42 @@ class SmartTranscriptionPipeline:
             processing_time = time.time() - start_time
             logger.info(f"⏱️ Processamento concluído em {processing_time:.1f}s")
     
+    async def _process_with_advanced_diarization(self, audio_path: str) -> str:
+        """Processamento com diarização avançada usando pyannote.audio"""
+        # Detectar speakers com sistema avançado
+        speaker_segments = self.diarizer.detect_speakers(audio_path)
+        
+        # Transcrever segmentos
+        transcriptions = []
+        audio, sr = librosa.load(audio_path, sr=16000)
+        
+        for segment in speaker_segments:
+            try:
+                # Extrair segmento
+                start_sample = int(segment['start'] * sr)
+                end_sample = int(segment['end'] * sr)
+                segment_audio = audio[start_sample:end_sample]
+                
+                # Salvar temporariamente
+                with tempfile.NamedTemporaryFile(suffix='.wav', delete=True) as temp_file:
+                    sf.write(temp_file.name, segment_audio, sr)
+                    
+                    # Transcrever
+                    text = self.transcriber.transcribe_full(temp_file.name)
+                    if text and text.strip():
+                        timestamp = f"[{self._format_time(segment['start'])} - {self._format_time(segment['end'])}]"
+                        speaker = segment['speaker']
+                        clean_text = self._clean_text(text)
+                        transcriptions.append(f"{timestamp} {speaker}:\n{clean_text}")
+                        
+            except Exception as e:
+                logger.warning(f"⚠️ Erro no segmento: {e}")
+                continue
+        
+        return "\n\n".join(transcriptions) if transcriptions else "Erro na transcrição."
+    
     async def _process_with_simple_diarization(self, audio_path: str) -> str:
-        """Processamento com diarização simples"""
+        """Processamento com diarização simples - MANTIDO COMO ESTAVA"""
         # Detectar speakers
         speaker_segments = self.diarizer.detect_speakers(audio_path)
         
@@ -480,7 +672,7 @@ class SmartTranscriptionPipeline:
         chunk_duration = 300  # 5 minutos por chunk
         
         if duration <= chunk_duration:
-            return await self._process_with_simple_diarization(audio_path)
+            return await self._process_with_advanced_diarization(audio_path)
         
         # Dividir áudio em chunks
         audio = AudioSegment.from_file(audio_path)
@@ -500,7 +692,7 @@ class SmartTranscriptionPipeline:
         # Processar cada chunk
         for chunk in chunks:
             try:
-                chunk_result = await self._process_with_simple_diarization(chunk['path'])
+                chunk_result = await self._process_with_advanced_diarization(chunk['path'])
                 
                 # Ajustar timestamps
                 lines = chunk_result.split('\n\n')
@@ -579,7 +771,7 @@ class SmartTranscriptionPipeline:
         return text
 
 async def main():
-    """Função principal simplificada"""
+    """Função principal simplificada - MANTIDA COMO ESTAVA"""
     if len(sys.argv) < 2:
         print(json.dumps({
             "status": "error",
@@ -591,7 +783,7 @@ async def main():
     output_dir = sys.argv[2] if len(sys.argv) > 2 else None
     
     try:
-        logger.info("🚀 Sistema de transcrição simples e eficaz")
+        logger.info("🚀 Sistema de transcrição melhorado com diarização avançada")
         pipeline = SmartTranscriptionPipeline()
         
         start_time = time.time()
@@ -613,7 +805,8 @@ async def main():
             "language": "pt",
             "processing_time_seconds": round(processing_time, 2),
             "timestamp": datetime.now().isoformat(),
-            "model_used": "simple_efficient_pipeline"
+            "model_used": "advanced_diarization_pipeline",
+            "pyannote_available": PYANNOTE_AVAILABLE
         }
         
         print(json.dumps(output, ensure_ascii=False))
