@@ -1,13 +1,33 @@
-# ESSENCIAIS - sem estes, nada funciona
+# ============================================================================
+# SISTEMA DE TRANSCRIÇÃO 100% GRATUITO - DEPENDÊNCIAS OTIMIZADAS
+# Versões testadas e compatíveis para servidor 8 vCPUs + 32GB RAM
+# ============================================================================
+
+# CORE ESSENCIAL - sem estas, o sistema não funciona
 openai-whisper==20231117
 pydub==0.25.1
 numpy==1.24.3
 
-# RECOMENDADAS - melhoram estabilidade e performance
-torch==2.1.0
-torchaudio==2.1.0
-soundfile==0.12.1
+# PROCESSAMENTO DE SINAIS - para diarização inteligente
+scipy==1.11.4
 
-# OPCIONAIS - só se quiser recursos extras
+# ÁUDIO E MULTIMEDIA - codecs e formatos
+ffmpeg-python==0.2.0
+
+# MACHINE LEARNING BASE - backend do Whisper
+torch==2.1.0+cpu
+torchaudio==2.1.0+cpu
+
+# PROCESSAMENTO DE ÁUDIO AVANÇADO - qualidade e performance
+soundfile==0.12.1
 librosa==0.10.1
-noisereduce==3.0.0
+
+# UTILITÁRIOS DE SISTEMA - threading e timeouts
+typing-extensions==4.8.0
+
+# OPCIONAL - apenas se quiser redução de ruído avançada
+# noisereduce==3.0.0
+
+# DESENVOLVIMENTO E DEBUG - remover em produção se quiser
+# matplotlib==3.7.2
+# jupyter==1.0.0
