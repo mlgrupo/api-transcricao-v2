@@ -14,9 +14,9 @@ scipy==1.11.4
 # ÁUDIO E MULTIMEDIA - codecs e formatos
 ffmpeg-python==0.2.0
 
-# MACHINE LEARNING BASE - backend do Whisper
-torch==2.1.0+cpu
-torchaudio==2.1.0+cpu
+# MACHINE LEARNING BASE - backend do Whisper (versões compatíveis com Docker)
+torch==2.1.0
+torchaudio==2.1.0
 
 # PROCESSAMENTO DE ÁUDIO AVANÇADO - qualidade e performance
 soundfile==0.12.1
