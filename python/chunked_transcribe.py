@@ -15,7 +15,7 @@ import numpy as np
 MIN_CHUNK_SECONDS = 30
 IDEAL_CHUNK_SECONDS = 1800  # 30 minutos
 MAX_CHUNKS = 12  # Limite superior para vídeos muito longos
-MAX_CONCURRENT_CHUNKS = 2 # Limitar para máxima estabilidade em CPU
+MAX_CONCURRENT_CHUNKS = 1  # Processar apenas um chunk por vez, sempre na ordem
 WHISPER_MODEL = "medium"
 
 USE_TURBO = os.environ.get("WHISPER_TURBO", "0") == "1"
@@ -43,19 +43,24 @@ def extract_audio(video_path, audio_path):
 def split_audio(audio_path, out_dir):
     audio = AudioSegment.from_wav(audio_path)
     duration_sec = len(audio) / 1000
-    # Calcular número ideal de chunks
     n_chunks = max(1, min(MAX_CHUNKS, math.ceil(duration_sec / IDEAL_CHUNK_SECONDS)))
     chunk_length = max(MIN_CHUNK_SECONDS, duration_sec / n_chunks)
+    # Arredondar chunk_length para baixo para múltiplo de 30s
+    if chunk_length >= 30:
+        chunk_length = int(chunk_length // 30) * 30
     chunk_paths = []
+    start = 0
     for i in range(n_chunks):
-        start = int(i * chunk_length * 1000)
-        end = int(min((i + 1) * chunk_length * 1000, len(audio)))
+        end = min(start + chunk_length * 1000, len(audio))
+        if i == n_chunks - 1:
+            end = len(audio)  # último chunk pega o resto
         if start >= end:
             break
-        chunk = audio[start:end]
+        chunk = audio[int(start):int(end)]
         chunk_path = os.path.join(out_dir, f"chunk_{i+1}.wav")
         chunk.export(chunk_path, format="wav")
         chunk_paths.append((chunk_path, start / 1000, end / 1000))
+        start = end
     # Se o último chunk for muito pequeno, junte ao anterior
     if len(chunk_paths) > 1 and (chunk_paths[-1][2] - chunk_paths[-1][1]) < MIN_CHUNK_SECONDS:
         prev_path, prev_start, prev_end = chunk_paths[-2]
@@ -76,7 +81,7 @@ def transcribe_chunk(chunk_path, start_sec, end_sec, model):
         if USE_TURBO:
             global TURBO_MODEL
             if TURBO_MODEL is None:
-                TURBO_MODEL = WhisperModel("medium", device="cpu", compute_type="int8", num_workers=1)
+                TURBO_MODEL = WhisperModel("medium", device="cpu", compute_type="float32", num_workers=1)
             segments, info = TURBO_MODEL.transcribe(chunk_path, beam_size=5, word_timestamps=True)
             segs = []
             for seg in segments:
@@ -137,16 +142,15 @@ def main():
             torch.set_default_dtype(torch.float32)
             log("Modelo Whisper padrão (medium) carregado.")
         log("Modelo carregado. Iniciando transcrição dos chunks...")
+        # Transcrever chunks sequencialmente (um por vez, na ordem)
         results = []
-        with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_CHUNKS) as executor:
-            futures = [executor.submit(transcribe_chunk, chunk_path, start, end, model) for chunk_path, start, end in chunk_infos]
-            for future in as_completed(futures):
-                res = future.result()
-                results.append(res)
-                try:
-                    os.remove(os.path.join(temp_dir, res["chunk"]))
-                except Exception:
-                    pass
+        for chunk_path, start, end in chunk_infos:
+            res = transcribe_chunk(chunk_path, start, end, model)
+            results.append(res)
+            try:
+                os.remove(chunk_path)
+            except Exception:
+                pass
         all_segments = []
         for chunk_path, start, end in chunk_infos:
             for r in results:
