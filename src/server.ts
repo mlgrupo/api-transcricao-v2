@@ -1,4 +1,5 @@
 import 'reflect-metadata'; // Adicione esta linha no início
+import 'dotenv/config'; // Carregar variáveis de ambiente
 import express from 'express';
 import cors from 'cors';
 import { rateLimit } from 'express-rate-limit';
@@ -8,6 +9,12 @@ import { initializeDevSeed } from './data/seed-manager';
 
 const expressApp = express();
 const PORT = process.env.PORT || 3001;
+
+// Debug: mostrar configurações
+console.log('🔍 === CONFIGURAÇÕES DO SERVIDOR ===');
+console.log('PORT:', PORT);
+console.log('NODE_ENV:', process.env.NODE_ENV);
+console.log('CORS_ORIGIN:', process.env.CORS_ORIGIN);
 
 // Configurar trust proxy
 expressApp.set('trust proxy', 'loopback, linklocal, uniquelocal');
@@ -33,27 +40,8 @@ expressApp.use(cors({
       callback(new Error('Not allowed by CORS'));
     }
   },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key']
+  credentials: true
 }));
-
-// Adicionar headers CORS manualmente para garantir
-expressApp.use((req, res, next) => {
-  const origin = req.headers.origin;
-  if (origin && corsOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-  }
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  
-  if (req.method === 'OPTIONS') {
-    res.sendStatus(200);
-  } else {
-    next();
-  }
-});
 expressApp.use(express.json());
 expressApp.use(limiter);
 

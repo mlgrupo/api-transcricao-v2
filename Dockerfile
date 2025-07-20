@@ -29,9 +29,9 @@ COPY . .
 # Build do projeto Node.js
 RUN npm run build
 
-# Instala dependências Python otimizadas (apenas o essencial)
+# Instala dependências Python
 RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r python/requirements-simple.txt
+    pip install --no-cache-dir -r python/requirements.txt
 
 # Instala PyTorch CPU (otimizado para servidor)
 RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cpu
