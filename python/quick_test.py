@@ -19,7 +19,7 @@ def test_imports():
         import numpy as np
         import librosa
         import noisereduce as nr
-        import webrtcvad
+        # import webrtcvad  # Removido - não disponível no Windows
         from spellchecker import SpellChecker
         import spacy
         import torch

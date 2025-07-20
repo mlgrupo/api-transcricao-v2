@@ -88,9 +88,9 @@ export class TranscriptionProcessor {
 
     const execAsync = promisify(exec);
     
-    // CORREÇÃO FUNDAMENTAL 1: Nome correto do script
-    // Esta era uma das principais causas de falha - usar nome incorreto
-    const scriptPath = path.join(process.cwd(), "python", "transcription.py");
+    // NOVA FUNCIONALIDADE: Usar adaptador robusto que escolhe automaticamente
+    // entre arquitetura robusta e sistema atual
+    const scriptPath = path.join(process.cwd(), "python", "robust_transcription_adapter.py");
 
     try {
       // ETAPA 1: Verificações pedagógicas iniciais
@@ -98,7 +98,7 @@ export class TranscriptionProcessor {
       await this.validateEnvironment(scriptPath, audioPath);
 
       // ETAPA 2: Executar transcrição inteligente
-      // Aqui usamos scripts dedicados em vez de comandos inline problemáticos
+      // Aqui usamos o adaptador robusto que escolhe automaticamente o melhor sistema
       const startTime = Date.now();
       const result = await this.executeFreeTranscription(execAsync, scriptPath, audioPath, outputDir);
       const duration = (Date.now() - startTime) / 1000;
@@ -195,6 +195,9 @@ export class TranscriptionProcessor {
    * 
    * DIFERENÇA FUNDAMENTAL: Em vez de usar 'python -c' com código inline,
    * usamos um script dedicado que gerencia eficientemente os recursos.
+   * 
+   * NOVA FUNCIONALIDADE: Agora usa o adaptador robusto que pode usar
+   * a arquitetura robusta de diarização ou fallback para o sistema atual.
    */
   private async executeFreeTranscription(
     execAsync: any,

@@ -1,0 +1,75 @@
+Exemplo de Transcrição com Timestamps:
+
+[00:00 → 00:03] Olá pessoal, bem-vindos ao nosso encontro de hoje.
+
+[00:03 → 00:07] Vamos falar sobre inteligência artificial e suas aplicações.
+
+[00:07 → 00:12] A IA está revolucionando diversos setores da nossa sociedade.
+
+[00:12 → 00:16] Desde a medicina até a educação, passando pela indústria.
+
+[00:16 → 00:20] É importante entendermos como essas tecnologias funcionam.
+
+[00:20 → 00:25] E como podemos utilizá-las de forma ética e responsável.
+
+[00:25 → 00:30] Vamos começar com uma breve introdução sobre machine learning.
+
+[00:30 → 00:35] Machine learning é um subconjunto da inteligência artificial.
+
+[00:35 → 00:40] Que permite aos computadores aprenderem sem serem explicitamente programados.
+
+[00:40 → 00:45] Existem diferentes tipos de algoritmos de machine learning.
+
+[00:45 → 00:50] Como aprendizado supervisionado, não supervisionado e por reforço.
+
+[00:50 → 00:55] Cada um tem suas aplicações específicas e vantagens.
+
+[00:55 → 01:00] Vamos explorar alguns exemplos práticos de cada tipo.
+
+[01:00 → 01:05] No aprendizado supervisionado, temos dados de entrada e saída conhecidos.
+
+[01:05 → 01:10] O algoritmo aprende a mapear entradas para saídas corretas.
+
+[01:10 → 01:15] Um exemplo clássico é a classificação de emails como spam ou não spam.
+
+[01:15 → 01:20] O sistema aprende com milhares de exemplos rotulados.
+
+[01:20 → 01:25] E depois consegue classificar novos emails automaticamente.
+
+[01:25 → 01:30] No aprendizado não supervisionado, não temos rótulos.
+
+[01:30 → 01:35] O algoritmo descobre padrões e estruturas nos dados por conta própria.
+
+[01:35 → 01:40] Um exemplo é o agrupamento de clientes por comportamento de compra.
+
+[01:40 → 01:45] O sistema identifica grupos similares sem saber previamente quais são.
+
+[01:45 → 01:50] Isso é muito útil para marketing e personalização de produtos.
+
+[01:50 → 01:55] Por fim, no aprendizado por reforço, o agente aprende através de tentativa e erro.
+
+[01:55 → 02:00] Ele recebe recompensas por ações corretas e penalidades por erros.
+
+[02:00 → 02:05] Um exemplo famoso é o AlphaGo, que aprendeu a jogar Go.
+
+[02:05 → 02:10] Através de milhões de partidas contra si mesmo.
+
+[02:10 → 02:15] E conseguiu superar os melhores jogadores humanos.
+
+[02:15 → 02:20] Essas tecnologias estão cada vez mais presentes no nosso dia a dia.
+
+[02:20 → 02:25] Desde recomendações de vídeos no YouTube até diagnósticos médicos.
+
+[02:25 → 02:30] É fundamental que todos tenham uma compreensão básica de como funcionam.
+
+[02:30 → 02:35] Para que possamos tomar decisões informadas sobre seu uso.
+
+[02:35 → 02:40] E garantir que sejam desenvolvidas e aplicadas de forma ética.
+
+[02:40 → 02:45] Obrigado pela atenção de todos vocês.
+
+[02:45 → 02:50] Espero que tenham gostado desta introdução à inteligência artificial.
+
+[02:50 → 02:55] Fiquem à vontade para fazer perguntas ou comentários.
+
+[02:55 → 03:00] Até a próxima aula! 

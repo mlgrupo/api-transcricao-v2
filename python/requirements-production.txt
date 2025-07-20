@@ -1,44 +1,45 @@
-# === SISTEMA DE TRANSCRIÇÃO COM DIARIZAÇÃO AVANÇADA ===
-# Dependências principais para produção
+# === DEPENDÊNCIAS DE PRODUÇÃO - ARQUITETURA ROBUSTA ===
+# Configurado para servidor Linux com 8 vCPUs e 32GB RAM
+# Suporte a 2 vídeos de 2h simultâneos
 
-# === CORE DEPENDENCIES ===
+# === CORE ML FRAMEWORKS ===
 # PyTorch CPU (instalado separadamente no Dockerfile)
 # torch>=2.0.0
 # torchaudio>=2.0.0
 numpy>=1.21.0
 scipy>=1.9.0
 
-# === WHISPER (OpenAI) ===
+# === WHISPER OPTIMIZADO ===
 openai-whisper>=20231117
 faster-whisper>=0.9.0
 
-# === PYANNOTE.AUDIO (Melhor biblioteca para diarização) ===
+# === DIARIZAÇÃO AVANÇADA ===
 # pyannote.audio>=3.1.0  # Instalar separadamente se necessário
 pyannote.core>=5.0.0
 pyannote.metrics>=3.2.0
 
 # === AUDIO PROCESSING ===
-pydub>=0.25.1
 librosa>=0.10.0
 soundfile>=0.12.1
+pydub>=0.25.1
 resampy>=0.4.0
 audioread>=3.0.0
 
-# === MACHINE LEARNING SUPPORT ===
+# === MACHINE LEARNING ===
 scikit-learn>=1.3.0
 pandas>=1.5.0
 transformers>=4.30.0
 huggingface_hub>=0.16.0
 
-# === PERFORMANCE OPTIMIZATION ===
+# === PERFORMANCE & MONITORING ===
+psutil>=5.9.0
 numba>=0.57.0
 joblib>=1.2.0
-psutil>=5.9.0
 
 # === UTILITIES ===
-requests>=2.28.0
 tqdm>=4.64.0
 python-dateutil>=2.8.2
+requests>=2.28.0
 aiofiles>=23.0.0
 multiprocessing-logging>=0.3.0
 
@@ -69,4 +70,4 @@ colorama>=0.4.6
 charset-normalizer>=2,<4
 idna>=2.5,<4
 urllib3>=1.21.1,<3
-certifi>=2017.4.17
+certifi>=2017.4.17 

@@ -3,6 +3,7 @@ import { TranscriptionController } from '../controllers/Transcription-controller
 import { AuthController } from '../controllers/auth-controller';
 import { DrivesController } from '../controllers/drives-controller';
 import { ConfigController } from '../controllers/config-controller';
+import { RobustTranscriptionController } from '../controllers/robust-transcription-controller';
 import { Logger } from '../../utils/logger';
 import { VideoService } from '../../domain/services/video-service';
 import { TranscriptionService } from '../../domain/services/transcription-service';
@@ -40,6 +41,8 @@ export const setupRoutes = (
 
   const configRepository = new ConfigRepository(logger);
   const configController = new ConfigController(configRepository, logger);
+  
+  const robustTranscriptionController = new RobustTranscriptionController(logger);
 
   // Rotas de autenticação
   app.post('/auth/google/callback', authController.googleCallback.bind(authController));
@@ -129,5 +132,38 @@ export const setupRoutes = (
   // Rota para criar usuário (apenas admin)
   app.post('/api/users', jwtAuthMiddleware, asyncHandler(
     authController.createUser.bind(authController)
+  ));
+
+  // Rotas da arquitetura robusta (apenas admin)
+  app.get('/api/robust/status', jwtAuthMiddleware, asyncHandler(
+    robustTranscriptionController.getStatus.bind(robustTranscriptionController)
+  ));
+  
+  app.post('/api/robust/test', jwtAuthMiddleware, asyncHandler(
+    robustTranscriptionController.testArchitecture.bind(robustTranscriptionController)
+  ));
+  
+  app.post('/api/robust/setup', jwtAuthMiddleware, asyncHandler(
+    robustTranscriptionController.setupArchitecture.bind(robustTranscriptionController)
+  ));
+  
+  app.get('/api/robust/metrics', jwtAuthMiddleware, asyncHandler(
+    robustTranscriptionController.getResourceMetrics.bind(robustTranscriptionController)
+  ));
+  
+  app.get('/api/robust/config', jwtAuthMiddleware, asyncHandler(
+    robustTranscriptionController.getConfig.bind(robustTranscriptionController)
+  ));
+  
+  app.post('/api/robust/config', jwtAuthMiddleware, asyncHandler(
+    robustTranscriptionController.updateConfig.bind(robustTranscriptionController)
+  ));
+  
+  app.post('/api/robust/force-mode', jwtAuthMiddleware, asyncHandler(
+    robustTranscriptionController.forceRobustMode.bind(robustTranscriptionController)
+  ));
+  
+  app.get('/api/robust/logs', jwtAuthMiddleware, asyncHandler(
+    robustTranscriptionController.getLogs.bind(robustTranscriptionController)
   ));
 };

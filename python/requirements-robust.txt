@@ -1,0 +1,61 @@
+# === ARQUITETURA ROBUSTA - DEPENDÊNCIAS OTIMIZADAS ===
+# Configurado para servidor Windows com 8 vCPUs e 32GB RAM
+# Suporte a 2 vídeos de 2h simultâneos
+
+# === CORE ML FRAMEWORKS ===
+# PyTorch CPU (já instalado via comando específico)
+# torch>=2.0.0
+# torchaudio>=2.0.0
+numpy>=1.21.0
+scipy>=1.9.0
+
+# === WHISPER OPTIMIZADO ===
+openai-whisper>=20231117
+faster-whisper>=0.9.0
+
+# === DIARIZAÇÃO AVANÇADA ===
+# pyannote.audio>=3.1.0  # Instalar separadamente se necessário
+pyannote.core>=5.0.0
+pyannote.metrics>=3.2.0
+
+# === AUDIO PROCESSING ===
+librosa>=0.10.0
+soundfile>=0.12.1
+pydub>=0.25.1
+# webrtcvad>=2.0.10  # Pode dar problema no Windows
+
+# === MACHINE LEARNING ===
+scikit-learn>=1.3.0
+pandas>=1.5.0
+transformers>=4.30.0
+huggingface_hub>=0.16.0
+
+# === PERFORMANCE & MONITORING ===
+psutil>=5.9.0
+numba>=0.57.0
+joblib>=1.2.0
+# asyncio-mqtt>=0.11.0  # Removido - não essencial
+
+# === UTILITIES ===
+tqdm>=4.64.0
+# pathlib2>=2.3.7  # Já incluído no Python 3.4+
+python-dateutil>=2.8.2
+requests>=2.28.0
+aiofiles>=23.0.0
+
+# === TESTING ===
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+# pytest-benchmark>=4.0.0  # Removido - não essencial
+
+# === LOGGING & MONITORING ===
+structlog>=23.0.0
+# prometheus-client>=0.17.0  # Removido - não essencial
+
+# === DEPENDÊNCIAS ADICIONAIS ===
+# Para processamento de áudio
+resampy>=0.4.0
+audioread>=3.0.0
+
+# Para processamento paralelo
+multiprocessing-logging>=0.3.0 
