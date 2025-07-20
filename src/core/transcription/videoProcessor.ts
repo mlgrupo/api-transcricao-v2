@@ -157,133 +157,23 @@ export class VideoProcessor {
       this.logger.info("Download do vídeo concluído", { videoId });
       await this.videoRepository.updateProgress(videoId, 25, "Download concluído");
 
-      // Converter para MP3
-      this.logger.info("Iniciando conversão para MP3", { videoId });
-      await this.videoRepository.updateProgress(videoId, 30, "Convertendo para MP3");
-      if (cancelObj?.cancelled) throw new Error('Processamento cancelado pelo usuário');
-      await this.audioProcessor.convertToMp3(videoPath, audioPath, cancelObj);
-      if (cancelObj?.cancelled) throw new Error('Processamento cancelado pelo usuário');
-      this.logger.info("Conversão para MP3 concluída", { videoId });
-      await this.videoRepository.updateProgress(videoId, 40, "Conversão para MP3 concluída");
-
-      // Transcrever áudio
+      // Download do vídeo já foi feito em videoPath
+      // Não precisa mais converter para MP3
+      // Transcrever vídeo diretamente
       this.logger.info("Iniciando transcrição", { videoId });
       let transcription: string;
       try {
-        await this.videoRepository.updateProgress(videoId, 45, "Preparando pastas no Drive");
+        await this.videoRepository.updateProgress(videoId, 55, "Iniciando transcrição do vídeo");
         if (cancelObj?.cancelled) throw new Error('Processamento cancelado pelo usuário');
-        
-        // 1. Verificar/criar pasta raiz (Meet)
-        const getRootFolderId = await this.driveService.checkFolderHasCreated(this.rootFolderName, drive);
-        let rootFolderId;
-        if (getRootFolderId === null) {
-          this.logger.info(`Pasta raiz '${this.rootFolderName}' não existe, criando...`);
-          rootFolderId = await this.driveService.createFolder(drive, this.rootFolderName, 'root');
-          this.logger.info(`Pasta raiz '${this.rootFolderName}' criada com ID: ${rootFolderId}`);
-        } else {
-          rootFolderId = getRootFolderId.folderId;
-          this.logger.info(`Pasta raiz '${this.rootFolderName}' encontrada com ID: ${rootFolderId}`);
-        }
-
-        // 2. Verificar/criar pasta de transcrição
-        let transcricaoFolderId;
-        const createFolderTranscricao = await this.driveService.checkFolderHasCreated(this.folderNameTranscricao, drive, rootFolderId);
-        if (createFolderTranscricao === null) {
-          this.logger.info(`Pasta '${this.folderNameTranscricao}' não existe, criando...`);
-          transcricaoFolderId = await this.driveService.createFolder(drive, this.folderNameTranscricao, rootFolderId);
-          this.logger.info(`Pasta '${this.folderNameTranscricao}' criada com ID: ${transcricaoFolderId}`);
-        } else {
-          transcricaoFolderId = createFolderTranscricao.folderId;
-          this.logger.info(`Pasta '${this.folderNameTranscricao}' encontrada com ID: ${transcricaoFolderId}`);
-        }
-
-        await this.videoRepository.updateProgress(videoId, 50, "Verificando transcrições existentes");
-
-        // Checar se já existe transcrição para este vídeo
-        const fileExtension = originalFileName.toLowerCase().endsWith('.mp4') ? '.mp4' : '';
-        const baseFileName = fileExtension
-          ? originalFileName.slice(0, -fileExtension.length)
-          : originalFileName;
-        const searchName = baseFileName.trim();
-        const existingTranscriptions = await this.driveService.searchFilesByNamePart(
-          drive,
-          searchName,
-          transcricaoFolderId
-        );
-        if (existingTranscriptions && existingTranscriptions.length > 0) {
-          this.logger.info(`Transcrição já existe para o vídeo '${originalFileName}'. Pulando processamento.`);
-          // Buscar o link do Google Docs
-          let foundDoc = null;
-          const mimeTypes = [
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            'text/plain',
-            'application/pdf'
-          ];
-          for (const mimeType of mimeTypes) {
-            foundDoc = existingTranscriptions.find(f => f.mimeType === mimeType && f.name.toLowerCase().includes(baseFileName.toLowerCase()) && f.name.toLowerCase().includes('transcrição'));
-            if (foundDoc) break;
-          }
-          if (foundDoc) {
-            let googleDocsUrl = '';
-            if (foundDoc.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-              googleDocsUrl = `https://docs.google.com/document/d/${foundDoc.id}/edit`;
-              // Buscar o texto do Google Docs
-              try {
-                const docs = google.docs({ version: 'v1', auth: oauth2Client });
-                const docContent = await docs.documents.get({ documentId: foundDoc.id });
-                // Extrair texto do conteúdo do documento
-                let extractedText = '';
-                if (docContent.data.body && docContent.data.body.content) {
-                  for (const element of docContent.data.body.content) {
-                    if (element.paragraph && element.paragraph.elements) {
-                      for (const elem of element.paragraph.elements) {
-                        if (elem.textRun && elem.textRun.content) {
-                          extractedText += elem.textRun.content;
-                        }
-                      }
-                    }
-                  }
-                }
-                if (extractedText.trim()) {
-                  await this.videoRepository.updateTranscriptionText(videoId, extractedText.trim());
-                }
-              } catch (err) {
-                this.logger.warn('Não foi possível obter o texto do Google Docs existente', { videoId, docId: foundDoc.id });
-              }
-            } else if (foundDoc.mimeType === 'application/pdf') {
-              googleDocsUrl = `https://drive.google.com/file/d/${foundDoc.id}/view`;
-            } else {
-              googleDocsUrl = `https://drive.google.com/file/d/${foundDoc.id}/view`;
-            }
-            await this.videoRepository.updateGoogleDocsUrl(videoId, googleDocsUrl);
-            this.logger.info('URL do documento de transcrição já existente salva no banco de dados', { videoId, docId: foundDoc.id, googleDocsUrl });
-            // Tentar buscar o texto da transcrição se for arquivo de texto
-            if (foundDoc.mimeType === 'text/plain') {
-              try {
-                const fileContent = await drive.files.get({ fileId: foundDoc.id, alt: 'media' }, { responseType: 'text' });
-                if (fileContent && fileContent.data) {
-                  await this.videoRepository.updateTranscriptionText(videoId, typeof fileContent.data === 'string' ? fileContent.data : JSON.stringify(fileContent.data));
-                }
-              } catch (err) {
-                this.logger.warn('Não foi possível obter o texto da transcrição já existente', { videoId, docId: foundDoc.id });
-              }
-            }
-          }
-          await this.videoRepository.markVideoAsCompleted(videoId);
-          await this.videoRepository.updateProgress(videoId, 100, 'Transcrição já existia');
-          return { success: true, alreadyUploaded: true };
-        }
-
-        await this.videoRepository.updateProgress(videoId, 55, "Iniciando transcrição do áudio");
         transcription = await this.transcriptionProcessor.transcribeAudio(
-          audioPath,
+          videoPath, // agora passa o caminho do vídeo
           videoId
         );
         this.logger.info("Transcrição concluída", { videoId });
         await this.videoRepository.updateProgress(videoId, 75, "Transcrição concluída");
       } catch (transcriptionError: any) {
         this.logger.error(
-          "Erro na transcrição, tentando abordagem alternativa",
+          "Erro na transcrição",
           {
             videoId,
             error: transcriptionError.message,

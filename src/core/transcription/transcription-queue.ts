@@ -6,6 +6,11 @@ interface QueueJob {
   webhookUrl: string;
   email: string;
   folderId?: string;
+  priority?: 'high' | 'normal' | 'low';
+  resourceLimit?: {
+    maxCpuPercent?: number;
+    maxMemoryGB?: number;
+  };
 }
 
 export class TranscriptionQueue {
@@ -14,6 +19,8 @@ export class TranscriptionQueue {
   private maxConcurrentJobs: number;
   // Mapa de controladores de cancelamento por videoId
   private cancellationMap: Map<string, { cancelled: boolean }> = new Map();
+  // Controle de recursos por job
+  private resourceUsage: Map<string, { cpuPercent: number; memoryGB: number }> = new Map();
 
   constructor(
     private logger: Logger,
@@ -31,7 +38,25 @@ export class TranscriptionQueue {
       this.logger.warn("Tarefa já existente na fila ou em processamento", { taskId });
       return;
     }
-    this.logger.info('Adicionando job à fila', { taskId, ...job });
+    
+    // Configurar limites de recursos padrão se não especificados
+    if (!job.resourceLimit) {
+      job.resourceLimit = {
+        maxCpuPercent: 49,  // Máximo 50% CPU por vídeo (4 vCPUs de 8)
+        maxMemoryGB: 13     // Máximo 12GB RAM por vídeo (de 32GB total)
+      };
+    }
+    
+    if (!job.priority) {
+      job.priority = 'normal';
+    }
+    
+    this.logger.info('Adicionando job à fila', { 
+      taskId, 
+      videoId: job.videoId,
+      priority: job.priority,
+      resourceLimit: job.resourceLimit
+    });
     this.queue.set(taskId, job);
     this._tryToProcess();
   }
@@ -59,10 +84,28 @@ export class TranscriptionQueue {
     return this.processing.size;
   }
 
-  public getQueueStatus(): { queued: number; processing: number } {
+  public getQueueStatus(): { 
+    queued: number; 
+    processing: number; 
+    totalCpuUsage: number; 
+    totalMemoryUsage: number;
+    resourceUsage: Array<{ taskId: string; cpuPercent: number; memoryGB: number }>;
+  } {
+    const totalCpuUsage = this.getTotalCpuUsage();
+    const totalMemoryUsage = this.getTotalMemoryUsage();
+    
+    const resourceUsage = Array.from(this.resourceUsage.entries()).map(([taskId, usage]) => ({
+      taskId,
+      cpuPercent: usage.cpuPercent,
+      memoryGB: usage.memoryGB
+    }));
+
     return {
       queued: this.queue.size,
-      processing: this.processing.size
+      processing: this.processing.size,
+      totalCpuUsage,
+      totalMemoryUsage,
+      resourceUsage
     };
   }
 
@@ -100,6 +143,41 @@ export class TranscriptionQueue {
     }
   }
 
+  /**
+   * Calcula o uso total de CPU dos jobs em processamento
+   */
+  private getTotalCpuUsage(): number {
+    let totalCpu = 0;
+    for (const usage of this.resourceUsage.values()) {
+      totalCpu += usage.cpuPercent;
+    }
+    return totalCpu;
+  }
+
+  /**
+   * Calcula o uso total de memória dos jobs em processamento
+   */
+  private getTotalMemoryUsage(): number {
+    let totalMemory = 0;
+    for (const usage of this.resourceUsage.values()) {
+      totalMemory += usage.memoryGB;
+    }
+    return totalMemory;
+  }
+
+  /**
+   * Verifica se há recursos suficientes para processar um job
+   */
+  private canProcessJob(job: QueueJob, currentCpuUsage: number, currentMemoryUsage: number): boolean {
+    const requiredCpu = job.resourceLimit?.maxCpuPercent || 50;
+    const requiredMemory = job.resourceLimit?.maxMemoryGB || 12;
+    
+    const availableCpu = 100 - currentCpuUsage;
+    const availableMemory = 32 - currentMemoryUsage;
+    
+    return availableCpu >= requiredCpu && availableMemory >= requiredMemory;
+  }
+
   private _tryToProcess(): void {
     if (this.processing.size >= this.maxConcurrentJobs) {
       this.logger.info('Limite de jobs paralelos atingido, aguardando...', {
@@ -109,13 +187,42 @@ export class TranscriptionQueue {
       return;
     }
 
+    // Verificar uso total de recursos
+    const totalCpuUsage = this.getTotalCpuUsage();
+    const totalMemoryUsage = this.getTotalMemoryUsage();
+    
+    this.logger.info('Verificando recursos disponíveis', {
+      totalCpuUsage: `${totalCpuUsage.toFixed(1)}%`,
+      totalMemoryUsage: `${totalMemoryUsage.toFixed(1)}GB`,
+      processing: this.processing.size
+    });
+
     // Pegar primeiros jobs da fila que não estão em processamento
     const availableTasks = Array.from(this.queue.keys())
       .filter(id => !this.processing.has(id));
 
     for (const taskId of availableTasks) {
       if (this.processing.size >= this.maxConcurrentJobs) break;
-      this._process(taskId);
+      
+      const job = this.queue.get(taskId);
+      if (!job) continue;
+      
+      // Verificar se há recursos suficientes para este job
+      const canProcess = this.canProcessJob(job, totalCpuUsage, totalMemoryUsage);
+      
+      if (canProcess) {
+        this._process(taskId);
+      } else {
+        this.logger.info('Recursos insuficientes para processar job', {
+          taskId,
+          videoId: job.videoId,
+          requiredCpu: job.resourceLimit?.maxCpuPercent,
+          requiredMemory: job.resourceLimit?.maxMemoryGB,
+          availableCpu: 100 - totalCpuUsage,
+          availableMemory: 32 - totalMemoryUsage
+        });
+        break; // Parar de tentar processar mais jobs
+      }
     }
   }
 
@@ -134,7 +241,18 @@ export class TranscriptionQueue {
     const cancelObj = { cancelled: false };
     this.cancellationMap.set(videoId, cancelObj);
 
-    this.logger.info('Iniciando processamento do job', { taskId, videoId, email });
+    // Registrar uso de recursos estimado
+    this.resourceUsage.set(taskId, {
+      cpuPercent: job.resourceLimit?.maxCpuPercent || 50,
+      memoryGB: job.resourceLimit?.maxMemoryGB || 12
+    });
+
+    this.logger.info('Iniciando processamento do job', { 
+      taskId, 
+      videoId, 
+      email,
+      resourceLimit: job.resourceLimit
+    });
 
     try {
       await this.videoProcessor.processVideo(videoId, webhookUrl, email, folderId, taskId, cancelObj);
@@ -144,6 +262,7 @@ export class TranscriptionQueue {
     } finally {
       this.processing.delete(taskId);
       this.cancellationMap.delete(videoId);
+      this.resourceUsage.delete(taskId);
       this._tryToProcess();
     }
   }

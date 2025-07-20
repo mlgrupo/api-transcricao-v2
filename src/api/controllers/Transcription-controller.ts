@@ -285,4 +285,43 @@ export class TranscriptionController {
       res.status(500).json({ error: error.message });
     }
   }
+
+  /**
+   * Retorna status da fila de transcrição com uso de recursos
+   */
+  public async getQueueStatus(req: Request, res: Response): Promise<void> {
+    try {
+      const user = (req as any).user;
+      if (!user || !user.isAdmin) {
+        res.status(403).json({ error: 'Acesso restrito a administradores.' });
+        return;
+      }
+
+      const queueStatus = this.transcriptionService.getQueueStatus();
+      const processingSize = this.transcriptionService.getProcessingSize();
+      
+      res.status(200).json({
+        success: true,
+        queue: {
+          queued: queueStatus.queued,
+          processing: queueStatus.processing,
+          totalCpuUsage: queueStatus.totalCpuUsage,
+          totalMemoryUsage: queueStatus.totalMemoryUsage,
+          resourceUsage: queueStatus.resourceUsage
+        },
+        limits: {
+          maxConcurrentJobs: 2,
+          maxCpuPerJob: 50, // 50% = 4 vCPUs de 8
+          maxMemoryPerJob: 12 // 12GB de 32GB
+        },
+        server: {
+          totalCpu: 8,
+          totalMemory: 32
+        }
+      });
+    } catch (error: any) {
+      this.logger.error('Erro ao buscar status da fila:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
 }

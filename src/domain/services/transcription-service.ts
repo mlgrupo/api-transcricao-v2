@@ -49,4 +49,8 @@ export class TranscriptionService {
   public cancelJob(videoId: string): void {
     this.transcriptionQueue.cancelJob(videoId);
   }
+
+  public getQueueStatus() {
+    return this.transcriptionQueue.getQueueStatus();
+  }
 }
