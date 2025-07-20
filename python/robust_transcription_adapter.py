@@ -119,77 +119,206 @@ class RobustTranscriptionAdapter:
                 raise
     
     async def _transcribe_with_whisper_only(self, audio_path: str, config: Dict[str, Any]) -> str:
-        """Transcrição direta com Whisper (sem diarização) com timestamps"""
+        """Transcrição com Whisper usando chunks para economizar memória"""
         try:
             import whisper
             import librosa
             import numpy as np
+            import tempfile
+            import os
             
-            logger.info("🎯 Iniciando transcrição direta com Whisper")
+            logger.info("🎯 Iniciando transcrição com chunks")
             
             # Carregar modelo Whisper
-            model_name = config.get("whisper_model", "large")
-            logger.info(f"📦 Carregando modelo: {model_name}")
+            model_name = config.get("whisper_model", "medium")
+            chunk_duration = config.get("chunk_duration", 90.0)  # 90 segundos por chunk
+            chunk_overlap = config.get("chunk_overlap", 15.0)    # 15 segundos de overlap
             
-            # Usar faster-whisper se disponível e se compute_type for int8
-            if config.get("compute_type") == "int8":
+            logger.info(f"📦 Carregando modelo: {model_name}")
+            logger.info(f"🔧 Configuração: {chunk_duration}s chunks, {chunk_overlap}s overlap")
+            
+            # Carregar áudio completo
+            audio_data, sample_rate = librosa.load(audio_path, sr=16000)
+            total_duration = len(audio_data) / sample_rate
+            
+            logger.info(f"🎵 Áudio total: {total_duration:.1f}s ({total_duration/60:.1f}min)")
+            
+            # Calcular número de chunks
+            chunk_samples = int(chunk_duration * sample_rate)
+            overlap_samples = int(chunk_overlap * sample_rate)
+            num_chunks = max(1, int((len(audio_data) - overlap_samples) / (chunk_samples - overlap_samples)))
+            
+            logger.info(f"📊 Dividindo em {num_chunks} chunks")
+            
+            # Carregar modelo (usar faster-whisper se disponível)
+            model = None
+            use_faster_whisper = config.get("compute_type") == "int8"
+            
+            if use_faster_whisper:
                 try:
                     from faster_whisper import WhisperModel
                     logger.info("🚀 Usando faster-whisper com turbo mode")
                     model = WhisperModel(model_name, device="cpu", compute_type="int8")
-                    
-                    # Carregar áudio
-                    audio_data, sample_rate = librosa.load(audio_path, sr=16000)
-                    
-                    # Transcrever
-                    logger.info("📝 Transcrevendo áudio...")
-                    segments, info = model.transcribe(
-                        audio_data,
-                        language="pt",
-                        word_timestamps=True
-                    )
-                    
-                    # Formatar com timestamps
-                    transcription = self._format_transcription_with_timestamps(segments)
-                    
                 except ImportError:
                     logger.info("📊 Faster-whisper não disponível, usando whisper padrão")
-                    # Fallback para whisper padrão
-                    model = whisper.load_model(model_name)
-                    
-                    # Transcrever
-                    logger.info("📝 Transcrevendo áudio...")
-                    result = model.transcribe(
-                        audio_path,
-                        language="pt",
-                        word_timestamps=True
-                    )
-                    
-                    transcription = self._format_whisper_result_with_timestamps(result)
-            else:
-                # Usar whisper padrão
+                    use_faster_whisper = False
+            
+            if not use_faster_whisper:
                 logger.info("📊 Usando whisper padrão")
                 model = whisper.load_model(model_name)
+            
+            # Processar chunks
+            all_transcriptions = []
+            
+            for i in range(num_chunks):
+                start_sample = i * (chunk_samples - overlap_samples)
+                end_sample = min(start_sample + chunk_samples, len(audio_data))
                 
-                # Transcrever
-                logger.info("📝 Transcrevendo áudio...")
+                # Extrair chunk
+                chunk_audio = audio_data[start_sample:end_sample]
+                chunk_start_time = start_sample / sample_rate
+                chunk_end_time = end_sample / sample_rate
+                
+                logger.info(f"🎯 Processando chunk {i+1}/{num_chunks}: {chunk_start_time:.1f}s - {chunk_end_time:.1f}s")
+                
+                try:
+                    # Salvar chunk temporariamente
+                    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                        import soundfile as sf
+                        sf.write(temp_file.name, chunk_audio, sample_rate)
+                        temp_path = temp_file.name
+                    
+                    # Transcrever chunk
+                    if use_faster_whisper:
+                        segments, info = model.transcribe(
+                            chunk_audio,
+                            language="pt",
+                            word_timestamps=True
+                        )
+                        
+                        # Formatar chunk com timestamps ajustados
+                        chunk_text = self._format_chunk_with_timestamps(segments, chunk_start_time)
+                    else:
+                        result = model.transcribe(
+                            temp_path,
+                            language="pt",
+                            word_timestamps=True
+                        )
+                        
+                        # Formatar chunk com timestamps ajustados
+                        chunk_text = self._format_whisper_chunk_with_timestamps(result, chunk_start_time)
+                    
+                    # Limpar arquivo temporário
+                    os.unlink(temp_path)
+                    
+                    if chunk_text.strip():
+                        all_transcriptions.append(chunk_text)
+                        logger.info(f"✅ Chunk {i+1} transcrito: {len(chunk_text)} caracteres")
+                    else:
+                        # Adicionar indicação de chunk sem conteúdo
+                        chunk_start_formatted = self._format_timestamp(chunk_start_time)
+                        chunk_end_formatted = self._format_timestamp(chunk_end_time)
+                        empty_message = f"[{chunk_start_formatted} → {chunk_end_formatted}] [SEM CONTEÚDO DE FALA] - Período de silêncio ou áudio inaudível"
+                        
+                        all_transcriptions.append(empty_message)
+                        logger.warning(f"⚠️ Chunk {i+1} sem conteúdo: {chunk_start_formatted} - {chunk_end_formatted}")
+                    
+                except Exception as chunk_error:
+                    logger.error(f"❌ Erro no chunk {i+1}: {chunk_error}")
+                    
+                    # Adicionar indicação de falha no chunk
+                    chunk_start_formatted = self._format_timestamp(chunk_start_time)
+                    chunk_end_formatted = self._format_timestamp(chunk_end_time)
+                    failure_message = f"[{chunk_start_formatted} → {chunk_end_formatted}] [FALHA NA TRANSCRIÇÃO] - Erro: {str(chunk_error)[:100]}..."
+                    
+                    all_transcriptions.append(failure_message)
+                    logger.warning(f"⚠️ Chunk {i+1} marcado como falha: {chunk_start_formatted} - {chunk_end_formatted}")
+                    
+                    # Continuar com próximo chunk
+                    continue
+            
+            # Juntar todas as transcrições
+            final_transcription = "\n\n".join(all_transcriptions)
+            
+            logger.info(f"✅ Transcrição concluída: {len(final_transcription)} caracteres em {num_chunks} chunks")
+            return final_transcription
+            
+        except Exception as e:
+            logger.error(f"❌ Erro na transcrição com chunks: {e}")
+            logger.info("🔄 Tentando fallback com transcrição direta...")
+            
+            try:
+                # Fallback: transcrição direta com modelo pequeno
+                import whisper
+                model = whisper.load_model("base")
+                
+                logger.info("📝 Transcrevendo diretamente com modelo base...")
                 result = model.transcribe(
                     audio_path,
                     language="pt",
-                    word_timestamps=True
+                    word_timestamps=False
                 )
                 
-                transcription = self._format_whisper_result_with_timestamps(result)
+                transcription = result.get("text", "")
+                logger.info(f"✅ Fallback concluído: {len(transcription)} caracteres")
+                return transcription
+                
+            except Exception as fallback_error:
+                logger.error(f"❌ Fallback também falhou: {fallback_error}")
+                raise Exception(f"Transcrição falhou completamente: {e}")
+    
+    def _format_chunk_with_timestamps(self, segments, chunk_start_time: float) -> str:
+        """Formata chunk do faster-whisper com timestamps ajustados"""
+        try:
+            formatted_lines = []
             
-            logger.info(f"✅ Transcrição concluída: {len(transcription)} caracteres")
-            return transcription
+            for segment in segments:
+                # Ajustar timestamps para o tempo global
+                global_start = chunk_start_time + segment.start
+                global_end = chunk_start_time + segment.end
+                
+                # Converter timestamps para formato legível
+                start_time = self._format_timestamp(global_start)
+                end_time = self._format_timestamp(global_end)
+                
+                # Formatar linha com timestamp
+                line = f"[{start_time} → {end_time}] {segment.text.strip()}"
+                formatted_lines.append(line)
+            
+            return "\n".join(formatted_lines)
             
         except Exception as e:
-            logger.error(f"❌ Erro na transcrição Whisper: {e}")
-            raise
+            logger.error(f"❌ Erro ao formatar timestamps do chunk: {e}")
+            # Fallback: juntar apenas o texto
+            return " ".join([segment.text for segment in segments])
+    
+    def _format_whisper_chunk_with_timestamps(self, result, chunk_start_time: float) -> str:
+        """Formata chunk do whisper padrão com timestamps ajustados"""
+        try:
+            formatted_lines = []
+            
+            for segment in result.get("segments", []):
+                # Ajustar timestamps para o tempo global
+                global_start = chunk_start_time + segment.get("start", 0)
+                global_end = chunk_start_time + segment.get("end", 0)
+                
+                # Converter timestamps para formato legível
+                start_time = self._format_timestamp(global_start)
+                end_time = self._format_timestamp(global_end)
+                
+                # Formatar linha com timestamp
+                line = f"[{start_time} → {end_time}] {segment.get('text', '').strip()}"
+                formatted_lines.append(line)
+            
+            return "\n".join(formatted_lines)
+            
+        except Exception as e:
+            logger.error(f"❌ Erro ao formatar timestamps do chunk: {e}")
+            # Fallback: retornar apenas o texto
+            return result.get("text", "")
     
     def _format_transcription_with_timestamps(self, segments) -> str:
-        """Formata transcrição do faster-whisper com timestamps"""
+        """Formata transcrição do faster-whisper com timestamps (mantido para compatibilidade)"""
         try:
             formatted_lines = []
             
@@ -275,7 +404,7 @@ class RobustTranscriptionAdapter:
             # Configuração baseada na duração
             if duration_hours > 1.0:  # Mais de 1 hora
                 config = {
-                    "whisper_model": "large",   # Large v1 com turbo
+                    "whisper_model": "medium",  # Medium para vídeos longos (menos memória)
                     "compute_type": "int8",     # Turbo mode
                     "chunk_duration": 180.0,    # Chunks de 3 minutos (mais eficiente)
                     "chunk_overlap": 20.0,      # Overlap de 20 segundos
@@ -284,10 +413,10 @@ class RobustTranscriptionAdapter:
                     "timeout_minutes": 0,       # Sem timeout para vídeos longos
                     "optimization": "long_video_turbo"
                 }
-                logger.info("🔧 Usando configuração para vídeo longo (>1h) - Large v1 TURBO - Sem timeout")
+                logger.info("🔧 Usando configuração para vídeo longo (>1h) - Medium TURBO - Sem timeout")
             elif duration_hours > 0.5:  # Entre 30 min e 1 hora
                 config = {
-                    "whisper_model": "large",   # Large v1 com turbo
+                    "whisper_model": "medium",  # Medium para vídeos médios (mais estável)
                     "compute_type": "int8",     # Turbo mode
                     "chunk_duration": 90.0,     # Chunks de 1.5 minutos
                     "chunk_overlap": 15.0,      # Overlap de 15 segundos
@@ -296,7 +425,7 @@ class RobustTranscriptionAdapter:
                     "timeout_minutes": 0,       # Sem timeout para vídeos médios
                     "optimization": "medium_video_turbo"
                 }
-                logger.info("🔧 Usando configuração para vídeo médio (30min-1h) - Large v1 TURBO - Sem timeout")
+                logger.info("🔧 Usando configuração para vídeo médio (30min-1h) - Medium TURBO - Sem timeout")
             else:  # Menos de 30 minutos
                 config = {
                     "whisper_model": "large",   # Large v1 com turbo

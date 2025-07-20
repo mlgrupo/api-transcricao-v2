@@ -340,6 +340,8 @@ export class VideoProcessor {
       }
 
       let transcriptionDocFileName;
+      let googleDocsUrl = 'Link não disponível'; // Declarar fora do if para estar disponível no webhook
+      
       if (originalFolderPath) {
         // Extrair o nome base do arquivo corretamente
         const fileExtension = originalFileName.toLowerCase().endsWith('.mp4') ? '.mp4' : '';
@@ -406,7 +408,7 @@ export class VideoProcessor {
             foundDoc = found.find(f => f.name.toLowerCase().includes(baseFileName.toLowerCase()) && f.name.toLowerCase().includes('transcrição'));
           }
           if (foundDoc) {
-            let googleDocsUrl = `https://drive.google.com/file/d/${foundDoc.id}/view`;
+            googleDocsUrl = `https://drive.google.com/file/d/${foundDoc.id}/view`;
             if (foundDoc.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
               googleDocsUrl = `https://docs.google.com/document/d/${foundDoc.id}/edit`;
             }
@@ -485,9 +487,9 @@ export class VideoProcessor {
         // Buscar informações do vídeo no banco
         const videoInfo = await this.videoRepository.getVideoById(videoId);
         
-        // Construir links
+        // Construir links - usar URL já obtida ou buscar do banco
         const videoLink = `https://drive.google.com/file/d/${videoId}/view`;
-        const transcriptionLink = videoInfo?.googleDocsUrl || 'Link não disponível';
+        const transcriptionLink = googleDocsUrl !== 'Link não disponível' ? googleDocsUrl : (videoInfo?.googleDocsUrl || 'Link não disponível');
         const videoName = videoInfo?.videoName || 'Vídeo sem nome';
         
         // Calcular tempo de processamento
