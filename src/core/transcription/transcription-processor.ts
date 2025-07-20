@@ -203,7 +203,7 @@ export class TranscriptionProcessor {
       // Comando para executar transcrição simples
       const command = [
         'python3',
-        '/app/python/transcribe_simple.py',
+        '/app/python/transcribe.py',
         videoPath
       ];
 
@@ -211,7 +211,7 @@ export class TranscriptionProcessor {
 
       // Executar transcrição
       const result = await new Promise<TranscriptionResult>((resolve, reject) => {
-        const pythonProcess = spawn('python3', ['/app/python/transcribe_simple.py', videoPath], {
+        const pythonProcess = spawn('python3', ['/app/python/transcribe.py', videoPath], {
           stdio: ['pipe', 'pipe', 'pipe'],
           env: {
             ...process.env,
@@ -232,7 +232,7 @@ export class TranscriptionProcessor {
           // Log em tempo real
           output.split('\n').forEach((line: string) => {
             if (line.trim()) {
-              this.logger.info(`[transcribe_simple.py] ${line.trim()}`);
+              this.logger.info(`[transcribe.py] ${line.trim()}`);
             }
           });
         });
@@ -252,10 +252,10 @@ export class TranscriptionProcessor {
                   trimmedLine.toLowerCase().includes('exception') ||
                   trimmedLine.toLowerCase().includes('failed') ||
                   trimmedLine.toLowerCase().includes('traceback')) {
-                this.logger.error(`[transcribe_simple.py][stderr] ${trimmedLine}`);
+                this.logger.error(`[transcribe.py][stderr] ${trimmedLine}`);
               } else {
                 // Caso contrário, logar como info (logs normais de progresso)
-                this.logger.info(`[transcribe_simple.py][progress] ${trimmedLine}`);
+                this.logger.info(`[transcribe.py][progress] ${trimmedLine}`);
               }
             }
           });
