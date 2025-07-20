@@ -28,8 +28,8 @@ export class TranscriptionQueue {
   ) {
     this.queue = new Map();
     this.processing = new Set();
-    // Otimizado para 7.5 vCPUs: 2 jobs simultâneos (cada um usa ~3.75 vCPUs)
-    this.maxConcurrentJobs = parseInt(process.env.MAX_CONCURRENT_JOBS || "2", 10);
+    // Otimizado para 7.5 vCPUs: 3 jobs simultâneos (cada um usa ~2.5 vCPUs)
+    this.maxConcurrentJobs = parseInt(process.env.MAX_CONCURRENT_JOBS || "3", 10);
 
     this.logger.info(`Fila de transcrição inicializada com limite de ${this.maxConcurrentJobs} jobs simultâneos`);
   }
@@ -43,8 +43,8 @@ export class TranscriptionQueue {
     // Configurar limites de recursos otimizados para 7.5 vCPUs e 28GB RAM
     if (!job.resourceLimit) {
       job.resourceLimit = {
-        maxCpuPercent: 45,  // Máximo 45% CPU por vídeo (3.375 vCPUs de 7.5)
-        maxMemoryGB: 12     // Máximo 12GB RAM por vídeo (de 28GB total)
+        maxCpuPercent: 30,  // Máximo 30% CPU por vídeo (2.25 vCPUs de 7.5)
+        maxMemoryGB: 8      // Máximo 8GB RAM por vídeo (de 28GB total)
       };
     }
     
@@ -170,11 +170,11 @@ export class TranscriptionQueue {
    * Verifica se há recursos suficientes para processar um job
    */
   private canProcessJob(job: QueueJob, currentCpuUsage: number, currentMemoryUsage: number): boolean {
-    const requiredCpu = job.resourceLimit?.maxCpuPercent || 45;
-    const requiredMemory = job.resourceLimit?.maxMemoryGB || 12;
+    const requiredCpu = job.resourceLimit?.maxCpuPercent || 30;
+    const requiredMemory = job.resourceLimit?.maxMemoryGB || 8;
     
     // Limites otimizados para 7.5 vCPUs e 28GB RAM
-    const availableCpu = 75 - currentCpuUsage;  // 75% de 7.5 vCPUs
+    const availableCpu = 90 - currentCpuUsage;  // 90% de 7.5 vCPUs
     const availableMemory = 28 - currentMemoryUsage;
     
     return availableCpu >= requiredCpu && availableMemory >= requiredMemory;
@@ -245,8 +245,8 @@ export class TranscriptionQueue {
 
     // Registrar uso de recursos estimado
     this.resourceUsage.set(taskId, {
-      cpuPercent: job.resourceLimit?.maxCpuPercent || 45,
-      memoryGB: job.resourceLimit?.maxMemoryGB || 12
+      cpuPercent: job.resourceLimit?.maxCpuPercent || 30,
+      memoryGB: job.resourceLimit?.maxMemoryGB || 8
     });
 
     this.logger.info('Iniciando processamento do job', { 

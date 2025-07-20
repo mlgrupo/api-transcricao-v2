@@ -21,7 +21,7 @@ async function restartFailedTranscriptions() {
     const failedVideos = await AppDataSource
       .createQueryBuilder("video", "v")
       .where("v.transcrito = :status", { status: "ERRO" })
-      .orWhere("v.transcrito IS NULL AND v.progressoEtapa = :progresso", { progresso: "Iniciando transcrição do vídeo" })
+      .orWhere("v.transcrito IS NULL AND v.etapaAtual = :progresso", { progresso: "Iniciando transcrição do vídeo" })
       .getMany();
 
     logger.info(`Encontrados ${failedVideos.length} vídeos com falha na transcrição`);
@@ -37,11 +37,12 @@ async function restartFailedTranscriptions() {
       
       await AppDataSource
         .createQueryBuilder()
-        .update("videos")
+        .update("transcricao_v2.videos_mapeados")
         .set({
           transcrito: null,
-          progressoEtapa: "Aguardando processamento",
-          updatedAt: new Date()
+          etapaAtual: "Aguardando processamento",
+          progress: 0,
+          dtAtualizacao: new Date()
         })
         .where("id = :id", { id: video.id })
         .execute();

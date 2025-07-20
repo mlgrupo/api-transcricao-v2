@@ -22,15 +22,15 @@ ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 
 # Configurações otimizadas para performance
-ENV OMP_NUM_THREADS=6
-ENV OPENBLAS_NUM_THREADS=6
-ENV MKL_NUM_THREADS=6
-ENV NUMEXPR_NUM_THREADS=6
+ENV OMP_NUM_THREADS=8
+ENV OPENBLAS_NUM_THREADS=8
+ENV MKL_NUM_THREADS=8
+ENV NUMEXPR_NUM_THREADS=8
 ENV PYTORCH_ENABLE_MPS_FALLBACK=1
 ENV WHISPER_TURBO=0
 
 # Configurações de memória para PyTorch
-ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:256
 
 # Copia o restante do código
 COPY . .
@@ -42,15 +42,15 @@ RUN npm run build
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r python/requirements.txt
 
-# Baixa o modelo Whisper large-v3 durante o build (otimizado)
-RUN python -c "import whisper; whisper.load_model('large-v3')"
+# Baixa o modelo Whisper medium durante o build (otimizado)
+RUN python -c "import whisper; whisper.load_model('medium')"
 
 # Cria pasta temporária com permissão total
 RUN mkdir -p /app/temp && chmod 777 /app/temp
 
 # Configurações de recursos
-ENV MAX_CONCURRENT_JOBS=2
-ENV MAX_CPU_PERCENT=75
+ENV MAX_CONCURRENT_JOBS=3
+ENV MAX_CPU_PERCENT=90
 ENV MAX_MEMORY_GB=28
 
 CMD ["sh", "-c", "npm start"]

@@ -20,17 +20,26 @@ import time
 from typing import List, Tuple, Dict, Any
 
 # Configurações otimizadas para 7.5 vCPUs e 28GB RAM
-MAX_WORKERS = 6  # 6 workers para 7.5 vCPUs (deixa 1.5 para sistema)
+MAX_WORKERS = 8  # 8 workers para chunks menores (mais paralelização)
 MAX_MEMORY_GB = 26  # 26GB para transcrição (deixa 2GB para sistema)
-CHUNK_SIZE_MB = 50  # Tamanho ideal de chunk para processamento
-MIN_CHUNK_SECONDS = 60  # Mínimo 1 minuto por chunk
-MAX_CHUNK_SECONDS = 1800  # Máximo 30 minutos por chunk
-WHISPER_MODEL = "large-v3"  # Melhor qualidade
-USE_TURBO = os.environ.get("WHISPER_TURBO", "1") == "1"
+CHUNK_SIZE_MB = 30  # Tamanho ideal de chunk para processamento (reduzido)
+MIN_CHUNK_SECONDS = 30  # Mínimo 30 segundos por chunk
+MAX_CHUNK_SECONDS = 300  # Máximo 5 minutos por chunk
+WHISPER_MODEL = "medium"  # Modelo mais rápido por padrão
+USE_TURBO = os.environ.get("WHISPER_TURBO", "0") == "1"
 
-# Configurações de qualidade
+# Configurações de qualidade - TODOS usando medium
 QUALITY_CONFIGS = {
     "fast": {
+        "model": "medium",
+        "beam_size": 2,
+        "best_of": 1,
+        "temperature": 0.0,
+        "compression_ratio_threshold": 2.4,
+        "logprob_threshold": -1.0,
+        "no_speech_threshold": 0.6
+    },
+    "balanced": {
         "model": "medium",
         "beam_size": 3,
         "best_of": 2,
@@ -39,19 +48,10 @@ QUALITY_CONFIGS = {
         "logprob_threshold": -1.0,
         "no_speech_threshold": 0.6
     },
-    "balanced": {
-        "model": "large-v3",
+    "high_quality": {
+        "model": "medium",
         "beam_size": 5,
         "best_of": 3,
-        "temperature": 0.0,
-        "compression_ratio_threshold": 2.4,
-        "logprob_threshold": -1.0,
-        "no_speech_threshold": 0.6
-    },
-    "high_quality": {
-        "model": "large-v3",
-        "beam_size": 7,
-        "best_of": 5,
         "temperature": 0.0,
         "compression_ratio_threshold": 2.4,
         "logprob_threshold": -1.0,
@@ -69,17 +69,21 @@ def get_optimal_config(duration_seconds: float) -> Dict[str, Any]:
         return QUALITY_CONFIGS["high_quality"]
     elif duration_seconds < 1800:  # < 30 minutos
         return QUALITY_CONFIGS["balanced"]
-    else:  # > 30 minutos
+    elif duration_seconds < 3600:  # < 1 hora
         return QUALITY_CONFIGS["fast"]
+    else:  # > 1 hora
+        return QUALITY_CONFIGS["fast"]  # Sempre fast para vídeos muito longos
 
 def get_optimal_chunk_size(duration_seconds: float) -> int:
     """Calcula tamanho ideal de chunk baseado na duração"""
     if duration_seconds < 300:  # < 5 minutos
         return min(duration_seconds, 300)  # Chunk único ou máximo 5 min
     elif duration_seconds < 1800:  # < 30 minutos
-        return min(duration_seconds / 2, 600)  # 2 chunks ou máximo 10 min
-    else:  # > 30 minutos
-        return min(duration_seconds / 4, 900)  # 4+ chunks ou máximo 15 min
+        return min(duration_seconds / 3, 400)  # 3 chunks ou máximo 6.7 min
+    elif duration_seconds < 3600:  # < 1 hora
+        return min(duration_seconds / 6, 350)  # 6 chunks ou máximo 10 min
+    else:  # > 1 hora
+        return min(duration_seconds / 12, 300)  # 12+ chunks ou máximo 5 min
 
 def extract_audio(video_path: str, audio_path: str) -> None:
     """Extrai áudio otimizado para transcrição"""
@@ -143,7 +147,7 @@ def split_audio_optimized(audio_path: str, out_dir: str, duration_seconds: float
     log(f"Criados {len(chunk_paths)} chunks otimizados")
     return chunk_paths
 
-def transcribe_chunk_optimized(chunk_info: Tuple[str, float, float], config: Dict[str, Any], total_chunks: int, chunk_index: int) -> Dict[str, Any]:
+def transcribe_chunk_optimized(chunk_info: Tuple[str, float, float], config: Dict[str, Any], total_chunks: int, chunk_index: int, model) -> Dict[str, Any]:
     """Transcreve um chunk com configuração otimizada"""
     chunk_path, start_sec, end_sec = chunk_info
     
@@ -152,9 +156,8 @@ def transcribe_chunk_optimized(chunk_info: Tuple[str, float, float], config: Dic
         progress_percent = ((chunk_index + 1) / total_chunks) * 100
         log(f"Transcrevendo chunk {os.path.basename(chunk_path)} ({start_sec:.1f}s - {end_sec:.1f}s) - Progresso: {progress_percent:.1f}%")
         
-        # Usar Whisper padrão (mais estável)
-        model = whisper.load_model(config["model"], device="cpu")
-        
+        # Usar modelo já carregado (passado como parâmetro)
+        # Configurações otimizadas para chunks menores
         result = model.transcribe(
             chunk_path,
             beam_size=config["beam_size"],
@@ -257,6 +260,11 @@ def main():
         # Transcrever chunks em paralelo
         log(f"Iniciando transcrição paralela com {MAX_WORKERS} workers...")
         
+        # Carregar modelo UMA VEZ SÓ
+        log("Carregando modelo Whisper medium...")
+        model = whisper.load_model("medium", device="cpu")
+        log("Modelo carregado com sucesso!")
+        
         all_segments = []
         languages = []
         language_probs = []
@@ -266,7 +274,7 @@ def main():
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             # Submeter todos os chunks
             future_to_chunk = {
-                executor.submit(transcribe_chunk_optimized, chunk_info, config, len(chunk_infos), i): chunk_info 
+                executor.submit(transcribe_chunk_optimized, chunk_info, config, len(chunk_infos), i, model): chunk_info 
                 for i, chunk_info in enumerate(chunk_infos)
             }
             
@@ -312,6 +320,9 @@ def main():
         
         if not all_segments:
             raise Exception("Nenhum segmento de transcrição gerado!")
+        
+        # Limpar modelo da memória
+        del model
         
         # Determinar idioma dominante
         if languages:

@@ -358,12 +358,13 @@ export class TranscriptionProcessor {
       
       await AppDataSource
         .createQueryBuilder()
-        .update("videos")
+        .update("transcricao_v2.videos_mapeados")
         .set({
-          progressoEtapa: `${progress}% - ${etapa}`,
-          updatedAt: new Date()
+          progress: progress,
+          etapaAtual: `${progress}% - ${etapa}`,
+          dtAtualizacao: new Date()
         })
-        .where("id = :id", { id: videoId })
+        .where("video_id = :videoId", { videoId })
         .execute();
         
       this.logger.info(`📊 Progresso atualizado para vídeo ${videoId}: ${progress}% - ${etapa}`);
