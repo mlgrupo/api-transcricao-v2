@@ -194,16 +194,16 @@ export class TranscriptionProcessor {
    */
   async executeSimpleTranscription(videoPath: string): Promise<TranscriptionResult> {
     try {
-      this.logger.info(`🎯 Iniciando transcrição SIMPLES para ${videoPath}`);
+      this.logger.info(`🎯 Iniciando transcrição OTIMIZADA para ${videoPath}`);
 
       // Verificar recursos
       const resources = await this.checkResources();
       this.logger.info(` Recursos iniciais: CPU ${resources.cpuPercent.toFixed(1)}%, RAM ${resources.memoryPercent.toFixed(1)}% (${resources.memoryAvailableGB.toFixed(1)}GB livre)`);
 
-      // Comando para executar transcrição simples
+      // Comando para executar transcrição otimizada
       const command = [
         'python3',
-        '/app/python/transcribe.py',
+        '/app/python/transcribe_optimized.py',
         videoPath
       ];
 
@@ -211,7 +211,7 @@ export class TranscriptionProcessor {
 
       // Executar transcrição
       const result = await new Promise<TranscriptionResult>((resolve, reject) => {
-        const pythonProcess = spawn('python3', ['/app/python/transcribe.py', videoPath], {
+        const pythonProcess = spawn('python3', ['/app/python/transcribe_optimized.py', videoPath], {
           stdio: ['pipe', 'pipe', 'pipe'],
           env: {
             ...process.env,
@@ -232,7 +232,7 @@ export class TranscriptionProcessor {
           // Log em tempo real
           output.split('\n').forEach((line: string) => {
             if (line.trim()) {
-              this.logger.info(`[transcribe.py] ${line.trim()}`);
+              this.logger.info(`[transcribe_optimized.py] ${line.trim()}`);
             }
           });
         });
@@ -241,10 +241,22 @@ export class TranscriptionProcessor {
           const output = data.toString();
           stderr += output;
           
-          // Log de erros em tempo real
+          // Log de stderr em tempo real (não necessariamente erro)
           output.split('\n').forEach((line: string) => {
             if (line.trim()) {
-              this.logger.error(`[transcribe.py][stderr] ${line.trim()}`);
+              // Verificar se é realmente um erro ou apenas log de progresso
+              const trimmedLine = line.trim();
+              
+              // Se contém palavras-chave de erro, logar como erro
+              if (trimmedLine.toLowerCase().includes('error') || 
+                  trimmedLine.toLowerCase().includes('exception') ||
+                  trimmedLine.toLowerCase().includes('failed') ||
+                  trimmedLine.toLowerCase().includes('traceback')) {
+                this.logger.error(`[transcribe_optimized.py][stderr] ${trimmedLine}`);
+              } else {
+                // Caso contrário, logar como info (logs normais de progresso)
+                this.logger.info(`[transcribe_optimized.py][progress] ${trimmedLine}`);
+              }
             }
           });
         });
@@ -272,7 +284,8 @@ export class TranscriptionProcessor {
                 resolve(jsonResult);
               } else {
                 // Se não encontrou JSON, criar resultado baseado nos logs
-                const fallbackResult: TranscriptionResult = {
+                this.logger.warn('Não foi possível extrair JSON do resultado, criando resultado baseado nos logs');
+                resolve({
                   success: true,
                   segments: [],
                   language: 'pt',
@@ -287,21 +300,21 @@ export class TranscriptionProcessor {
                     max_workers: 2,
                     ram_per_worker_gb: 13
                   }
-                };
-                resolve(fallbackResult);
+                });
               }
-            } catch (parseError) {
-              this.logger.error(`Erro ao processar resultado: ${parseError}`);
-              reject(new Error(`Erro ao processar resultado: ${parseError}`));
+            } catch (e) {
+              this.logger.error(`Erro ao processar resultado: ${e}`);
+              reject(new Error(`Erro ao processar resultado: ${e}`));
             }
           } else {
-            this.logger.error(`Processo falhou com código ${code}`);
-            reject(new Error(`Processo falhou com código ${code}. Stderr: ${stderr}`));
+            this.logger.error(`Processo Python falhou com código ${code}`);
+            this.logger.error(`Stderr: ${stderr}`);
+            reject(new Error(`Processo Python falhou com código ${code}: ${stderr}`));
           }
         });
 
         pythonProcess.on('error', (error: Error) => {
-          this.logger.error(`Erro ao executar processo: ${error}`);
+          this.logger.error(`Erro ao executar processo Python: ${error.message}`);
           reject(error);
         });
       });
@@ -309,7 +322,7 @@ export class TranscriptionProcessor {
       return result;
 
     } catch (error) {
-      this.logger.error(`❌ Erro na transcrição SIMPLES: ${error}`);
+      this.logger.error(`Erro na transcrição otimizada: ${error}`);
       throw error;
     }
   }
