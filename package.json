@@ -10,6 +10,7 @@
     "start:dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "start:dev:tsx": "tsx watch src/server.ts",
     "clean-stuck": "ts-node src/scripts/clean-stuck-videos.ts",
+    "restart-failed": "ts-node src/scripts/restart-transcription.ts",
     "test-performance": "python python/test_performance.py"
   },
   "keywords": [],

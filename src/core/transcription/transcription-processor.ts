@@ -98,12 +98,24 @@ export class TranscriptionProcessor {
       if (!videoExists) {
         throw new Error(`Arquivo de vídeo não encontrado: ${videoPath}`);
       }
+      
+      // Atualizar progresso no banco
+      await this.updateVideoProgress(videoId, 60, "Transcrevendo áudio...");
+      
       // Executar o script Python
       const startTime = Date.now();
-      const result = await this.executeChunkedTranscription(scriptPath, videoPath, outputDir);
+      const result = await this.executeChunkedTranscription(scriptPath, videoPath, outputDir, videoId);
       const duration = (Date.now() - startTime) / 1000;
+      
+      // Atualizar progresso final
+      await this.updateVideoProgress(videoId, 90, "Processando transcrição...");
+      
       // Processar resultado
       const transcription = this.processSegmentsResult(result, duration, videoId);
+      
+      // Atualizar progresso final
+      await this.updateVideoProgress(videoId, 100, "Transcrição concluída");
+      
       this.logger.info("✅ Transcrição concluída com sucesso", {
         videoId,
         durationSeconds: duration,
@@ -113,6 +125,9 @@ export class TranscriptionProcessor {
       });
       return transcription;
     } catch (error: any) {
+      // Atualizar progresso de erro
+      await this.updateVideoProgress(videoId, 0, "Erro na transcrição");
+      
       this.logger.error("❌ Erro na transcrição:", {
         videoId,
         error: error.message,
@@ -125,7 +140,8 @@ export class TranscriptionProcessor {
   private async executeChunkedTranscription(
     scriptPath: string,
     videoPath: string,
-    outputDir?: string
+    outputDir?: string,
+    videoId?: string
   ): Promise<{ 
     segments: Array<{ start: number; end: number; text: string; words?: any[] }>;
     metadata?: {
@@ -178,11 +194,53 @@ export class TranscriptionProcessor {
           });
           lastLogTime = now;
         }
+        
+        // Extrair progresso do JSON se disponível
+        try {
+          const jsonMatch = chunk.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const jsonData = JSON.parse(jsonMatch[0]);
+            if (jsonData.metadata) {
+              const progress = (jsonData.metadata.chunks_processed / jsonData.metadata.chunks_processed) * 100;
+              this.logger.info(`📊 Progresso JSON: ${progress.toFixed(1)}% - ${jsonData.metadata.segments_count} segmentos`);
+            }
+          }
+        } catch (e) {
+          // Ignorar erros de parsing JSON
+        }
       });
 
       python.stderr.on("data", (data) => {
         const chunk = data.toString();
         stderrBuffer += chunk;
+        
+        // Extrair informações de progresso dos logs do Python
+        const progressMatch = chunk.match(/Progresso geral: ([\d.]+)%/);
+        const chunkMatch = chunk.match(/Transcrevendo chunk.*Progresso: ([\d.]+)%/);
+        const resourcesMatch = chunk.match(/Recursos: CPU ([\d.]+)%, RAM ([\d.]+)%/);
+        const timeMatch = chunk.match(/Tempo restante estimado: ([\d.]+) min/);
+        
+        if (progressMatch) {
+          const progress = parseFloat(progressMatch[1]);
+          this.logger.info(`📊 Progresso da transcrição: ${progress.toFixed(1)}%`);
+        }
+        
+        if (chunkMatch) {
+          const chunkProgress = parseFloat(chunkMatch[1]);
+          this.logger.info(`🎯 Chunk em processamento: ${chunkProgress.toFixed(1)}%`);
+        }
+        
+        if (resourcesMatch) {
+          const cpu = parseFloat(resourcesMatch[1]);
+          const ram = parseFloat(resourcesMatch[2]);
+          this.logger.info(`💻 Recursos: CPU ${cpu.toFixed(1)}%, RAM ${ram.toFixed(1)}%`);
+        }
+        
+        if (timeMatch) {
+          const timeRemaining = parseFloat(timeMatch[1]);
+          this.logger.info(`⏱️ Tempo restante estimado: ${timeRemaining.toFixed(1)} minutos`);
+        }
+        
         this.logger.info("[chunked_transcribe.py][stderr]", { stderr: chunk });
       });
 
@@ -286,6 +344,31 @@ export class TranscriptionProcessor {
       return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     } else {
       return `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+  }
+
+  private async updateVideoProgress(videoId: string, progress: number, etapa: string): Promise<void> {
+    try {
+      // Importar dinamicamente para evitar dependência circular
+      const { AppDataSource } = await import("../../data/data-source");
+      
+      if (!AppDataSource.isInitialized) {
+        return; // Se não estiver inicializado, não atualizar
+      }
+      
+      await AppDataSource
+        .createQueryBuilder()
+        .update("videos")
+        .set({
+          progressoEtapa: `${progress}% - ${etapa}`,
+          updatedAt: new Date()
+        })
+        .where("id = :id", { id: videoId })
+        .execute();
+        
+      this.logger.info(`📊 Progresso atualizado para vídeo ${videoId}: ${progress}% - ${etapa}`);
+    } catch (error) {
+      this.logger.warn(`Não foi possível atualizar progresso do vídeo ${videoId}:`, error);
     }
   }
 

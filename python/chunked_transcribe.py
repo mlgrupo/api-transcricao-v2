@@ -143,96 +143,62 @@ def split_audio_optimized(audio_path: str, out_dir: str, duration_seconds: float
     log(f"Criados {len(chunk_paths)} chunks otimizados")
     return chunk_paths
 
-def transcribe_chunk_optimized(chunk_info: Tuple[str, float, float], config: Dict[str, Any]) -> Dict[str, Any]:
+def transcribe_chunk_optimized(chunk_info: Tuple[str, float, float], config: Dict[str, Any], total_chunks: int, chunk_index: int) -> Dict[str, Any]:
     """Transcreve um chunk com configuração otimizada"""
     chunk_path, start_sec, end_sec = chunk_info
     
     try:
-        log(f"Transcrevendo chunk {os.path.basename(chunk_path)} ({start_sec:.1f}s - {end_sec:.1f}s)")
+        # Calcular porcentagem de progresso
+        progress_percent = ((chunk_index + 1) / total_chunks) * 100
+        log(f"Transcrevendo chunk {os.path.basename(chunk_path)} ({start_sec:.1f}s - {end_sec:.1f}s) - Progresso: {progress_percent:.1f}%")
         
-        if USE_TURBO:
-            from faster_whisper import WhisperModel
-            
-            # Carregar modelo uma vez por worker
-            model = WhisperModel(
-                config["model"], 
-                device="cpu", 
-                compute_type="float32",
-                num_workers=1,
-                download_root=None
-            )
-            
-            # Transcrever com configurações otimizadas
-            segments, info = model.transcribe(
-                chunk_path,
-                beam_size=config["beam_size"],
-                best_of=config["best_of"],
-                temperature=config["temperature"],
-                compression_ratio_threshold=config["compression_ratio_threshold"],
-                log_prob_threshold=config["logprob_threshold"],
-                no_speech_threshold=config["no_speech_threshold"],
-                word_timestamps=True,
-                condition_on_previous_text=False,
-                initial_prompt=None
-            )
-            
-            # Processar segmentos
-            segs = []
-            for seg in segments:
-                segs.append({
-                    "start": float(seg.start) + start_sec,
-                    "end": float(seg.end) + start_sec,
-                    "text": seg.text.strip(),
-                    "words": [{"word": w.word, "start": float(w.start) + start_sec, "end": float(w.end) + start_sec} for w in seg.words] if hasattr(seg, 'words') else []
-                })
-            
-            return {
-                "segments": segs, 
-                "chunk": os.path.basename(chunk_path),
-                "language": info.language,
-                "language_probability": info.language_probability
-            }
-        else:
-            # Whisper padrão
-            model = whisper.load_model(config["model"], device="cpu")
-            
-            result = model.transcribe(
-                chunk_path,
-                beam_size=config["beam_size"],
-                best_of=config["best_of"],
-                temperature=config["temperature"],
-                compression_ratio_threshold=config["compression_ratio_threshold"],
-                logprob_threshold=config["logprob_threshold"],
-                no_speech_threshold=config["no_speech_threshold"],
-                word_timestamps=True,
-                condition_on_previous_text=False,
-                initial_prompt=None,
-                verbose=False,
-                fp16=False
-            )
-            
-            segments = []
-            for seg in result.get("segments", []):
-                segments.append({
-                    "start": float(seg["start"]) + start_sec,
-                    "end": float(seg["end"]) + start_sec,
-                    "text": seg["text"].strip(),
-                    "words": seg.get("words", [])
-                })
-            
-            return {
-                "segments": segments, 
-                "chunk": os.path.basename(chunk_path),
-                "language": result.get("language", "pt"),
-                "language_probability": result.get("language_probability", 1.0)
-            }
-            
+        # Usar Whisper padrão (mais estável)
+        model = whisper.load_model(config["model"], device="cpu")
+        
+        result = model.transcribe(
+            chunk_path,
+            beam_size=config["beam_size"],
+            best_of=config["best_of"],
+            temperature=config["temperature"],
+            compression_ratio_threshold=config["compression_ratio_threshold"],
+            logprob_threshold=config["logprob_threshold"],
+            no_speech_threshold=config["no_speech_threshold"],
+            word_timestamps=True,
+            condition_on_previous_text=False,
+            initial_prompt=None,
+            verbose=False,
+            fp16=False
+        )
+        
+        segments = []
+        for seg in result.get("segments", []):
+            segments.append({
+                "start": float(seg["start"]) + start_sec,
+                "end": float(seg["end"]) + start_sec,
+                "text": seg["text"].strip(),
+                "words": seg.get("words", [])
+            })
+        
+        # Log de conclusão do chunk
+        log(f"Chunk {os.path.basename(chunk_path)} concluído - {len(segments)} segmentos - Progresso: {progress_percent:.1f}%")
+        
+        return {
+            "segments": segments, 
+            "chunk": os.path.basename(chunk_path),
+            "language": result.get("language", "pt"),
+            "language_probability": result.get("language_probability", 1.0),
+            "progress_percent": progress_percent,
+            "chunk_index": chunk_index
+        }
+        
     except Exception as e:
         log(f"Erro ao transcrever chunk {chunk_path}: {e}", "ERROR")
         return {
             "segments": [], 
             "chunk": os.path.basename(chunk_path), 
-            "error": str(e)
+            "error": str(e),
+            "progress_percent": ((chunk_index + 1) / total_chunks) * 100,
+            "chunk_index": chunk_index
         }
 
 def monitor_resources() -> Dict[str, float]:
@@ -294,12 +260,14 @@ def main():
         all_segments = []
         languages = []
         language_probs = []
+        completed_chunks = 0
+        start_transcription_time = time.time()
         
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             # Submeter todos os chunks
             future_to_chunk = {
-                executor.submit(transcribe_chunk_optimized, chunk_info, config): chunk_info 
-                for chunk_info in chunk_infos
+                executor.submit(transcribe_chunk_optimized, chunk_info, config, len(chunk_infos), i): chunk_info 
+                for i, chunk_info in enumerate(chunk_infos)
             }
             
             # Processar resultados conforme ficam prontos
@@ -307,6 +275,7 @@ def main():
                 chunk_info = future_to_chunk[future]
                 try:
                     result = future.result()
+                    completed_chunks += 1
                     
                     if "error" in result:
                         log(f"Erro no chunk {result['chunk']}: {result['error']}", "ERROR")
@@ -316,10 +285,21 @@ def main():
                     languages.append(result.get("language", "pt"))
                     language_probs.append(result.get("language_probability", 1.0))
                     
-                    # Monitorar recursos
-                    if len(all_segments) % 3 == 0:  # A cada 3 chunks
+                    # Calcular progresso geral e tempo estimado
+                    overall_progress = (completed_chunks / len(chunk_infos)) * 100
+                    elapsed_time = time.time() - start_transcription_time
+                    
+                    if completed_chunks > 0:
+                        avg_time_per_chunk = elapsed_time / completed_chunks
+                        remaining_chunks = len(chunk_infos) - completed_chunks
+                        estimated_remaining_time = remaining_chunks * avg_time_per_chunk
+                        
+                        log(f"Progresso geral: {overall_progress:.1f}% ({completed_chunks}/{len(chunk_infos)} chunks) - Tempo restante estimado: {estimated_remaining_time/60:.1f} min")
+                    
+                    # Monitorar recursos a cada 2 chunks completados
+                    if completed_chunks % 2 == 0:
                         resources = monitor_resources()
-                        log(f"Progresso: {len(all_segments)} segmentos, CPU {resources['cpu_percent']:.1f}%, RAM {resources['memory_percent']:.1f}%")
+                        log(f"Recursos: CPU {resources['cpu_percent']:.1f}%, RAM {resources['memory_percent']:.1f}% - Segmentos: {len(all_segments)}")
                     
                     # Limpar chunk processado
                     try:
