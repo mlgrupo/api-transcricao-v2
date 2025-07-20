@@ -21,7 +21,7 @@ ENV NODE_ENV=production
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 
-# Configurações otimizadas para máxima performance
+# Configurações otimizadas para MÁXIMA performance de CPU
 ENV OMP_NUM_THREADS=8
 ENV OPENBLAS_NUM_THREADS=8
 ENV MKL_NUM_THREADS=8
@@ -29,18 +29,25 @@ ENV NUMEXPR_NUM_THREADS=8
 ENV PYTORCH_ENABLE_MPS_FALLBACK=1
 ENV WHISPER_TURBO=0
 
-# Configurações de memória para PyTorch - usar toda RAM disponível
-ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:1024
+# Configurações de memória para PyTorch - MÁXIMO para CPU
+ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:2048
 ENV PYTORCH_NUM_THREADS=8
 
-# Configurações de recursos - usar tudo
+# Configurações de recursos - MÁXIMO CPU
 ENV MAX_CONCURRENT_JOBS=1
 ENV MAX_CPU_PERCENT=100
 ENV MAX_MEMORY_GB=28
 
-# Configurações Whisper - modelo ULTRA rápido
-ENV WHISPER_MODEL=small
+# Configurações Whisper - MÁXIMO para CPU
+ENV WHISPER_MODEL=medium
 ENV WHISPER_DEVICE=cpu
+
+# Configurações adicionais para CPU
+ENV MKL_DYNAMIC=FALSE
+ENV MKL_THREADING_LAYER=INTEL
+ENV OPENMP_NUM_THREADS=8
+ENV BLAS_NUM_THREADS=8
+ENV LAPACK_NUM_THREADS=8
 
 # Copia o restante do código
 COPY . .

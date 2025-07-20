@@ -20,37 +20,37 @@ import gc
 # Importar pós-processador
 from post_processor import TranscriptionPostProcessor
 
-# Configurações robustas e otimizadas
+# Configurações robustas e otimizadas para CPU MÁXIMO
 CHUNK_SIZE_SECONDS = 300  # 5 minutos por chunk
-MAX_WORKERS = 2  # Processar 2 chunks por vez (robusto)
+MAX_WORKERS = 4  # Aumentar para 4 workers (máximo CPU)
 WHISPER_MODEL = "medium"  # Equilibrio entre velocidade e qualidade
 
-# Configurações de qualidade por duração
+# Configurações de qualidade por duração - OTIMIZADAS PARA CPU
 QUALITY_CONFIGS = {
     "fast": {
         "model": "medium",
-        "beam_size": 2,
-        "best_of": 1,
+        "beam_size": 1,  # Mínimo para velocidade
+        "best_of": 1,    # Mínimo para velocidade
         "temperature": 0.0,
-        "patience": 1,
+        "patience": 1,   # Mínimo patience
         "length_penalty": 1.0,
         "repetition_penalty": 1.0
     },
     "balanced": {
         "model": "medium", 
-        "beam_size": 3,
-        "best_of": 2,
+        "beam_size": 2,  # Reduzido para velocidade
+        "best_of": 1,    # Mínimo para velocidade
         "temperature": 0.0,
-        "patience": 2,
+        "patience": 1,   # Mínimo patience
         "length_penalty": 1.0,
         "repetition_penalty": 1.0
     },
     "high_quality": {
         "model": "medium",
-        "beam_size": 5,
-        "best_of": 3,
+        "beam_size": 3,  # Reduzido para velocidade
+        "best_of": 2,    # Reduzido para velocidade
         "temperature": 0.0,
-        "patience": 3,
+        "patience": 2,   # Mínimo patience
         "length_penalty": 1.0,
         "repetition_penalty": 1.0
     }
@@ -272,22 +272,28 @@ def main():
         log(f"Carregando modelo Whisper {config['model']}...")
         model = whisper.load_model(config["model"], device="cpu")
         
-        # Configurar PyTorch para performance
-        torch.set_num_threads(8)
+        # Configurar PyTorch para MÁXIMA performance de CPU
+        torch.set_num_threads(8)  # Usar todos os cores disponíveis
         torch.set_default_dtype(torch.float32)
-        torch.backends.cudnn.benchmark = True
-        torch.backends.cudnn.deterministic = False
-        torch.set_grad_enabled(False)
+        torch.backends.cudnn.benchmark = True  # Otimizar convoluções
+        torch.backends.cudnn.deterministic = False  # Permitir otimizações não-determinísticas
+        torch.set_grad_enabled(False)  # Sem gradientes para velocidade
         
+        # Otimizações adicionais para CPU
+        torch.backends.cudnn.enabled = True  # Habilitar cuDNN
+        torch.backends.openmp.enabled = True  # Habilitar OpenMP
+        torch.backends.mkldnn.enabled = True  # Habilitar MKL-DNN
+        
+        # Configurar cache de modelo para reutilização
         if hasattr(model, 'encoder'):
-            model.encoder.eval()
+            model.encoder.eval()  # Modo de avaliação para velocidade
         if hasattr(model, 'decoder'):
-            model.decoder.eval()
+            model.decoder.eval()  # Modo de avaliação para velocidade
         
         log("Modelo carregado com sucesso!")
         
-        # Transcrever chunks em paralelo (2 por vez)
-        log(f"Iniciando transcrição paralela com {MAX_WORKERS} workers...")
+        # Transcrever chunks em paralelo (4 por vez - MÁXIMO CPU)
+        log(f"Iniciando transcrição paralela com {MAX_WORKERS} workers (MÁXIMO CPU)...")
         
         all_segments = []
         languages = []
@@ -312,12 +318,15 @@ def main():
                 except Exception as e:
                     log(f"Erro no chunk {chunk_index + 1}: {e}", "ERROR")
                 
-                # Limpar chunk processado
+                # Limpar chunk processado IMEDIATAMENTE para liberar memória
                 try:
                     chunk_path = chunk_infos[chunk_index][0]
                     os.remove(chunk_path)
                 except:
                     pass
+                
+                # Limpeza de memória AGGRESSIVA
+                gc.collect()
         
         if not all_segments:
             raise Exception("Nenhum segmento de transcrição gerado!")

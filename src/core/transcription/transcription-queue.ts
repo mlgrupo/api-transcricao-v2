@@ -40,10 +40,10 @@ export class TranscriptionQueue {
       return;
     }
     
-    // Configurar limites de recursos para máxima velocidade
+    // Configurar limites de recursos para MÁXIMO CPU
     if (!job.resourceLimit) {
       job.resourceLimit = {
-        maxCpuPercent: 100,  // Máximo 100% CPU (todos os 7.5 vCPUs)
+        maxCpuPercent: 100,  // Máximo 100% CPU (todos os 8 vCPUs)
         maxMemoryGB: 26      // Máximo 26GB RAM (de 28GB total)
       };
     }
@@ -173,7 +173,7 @@ export class TranscriptionQueue {
     const requiredCpu = job.resourceLimit?.maxCpuPercent || 100;
     const requiredMemory = job.resourceLimit?.maxMemoryGB || 26;
     
-    // Limites para máxima velocidade - usar tudo
+    // Limites para MÁXIMO CPU - usar tudo
     const availableCpu = 100 - currentCpuUsage;  // 100% disponível
     const availableMemory = 28 - currentMemoryUsage;
     
