@@ -117,8 +117,8 @@ def transcribe_chunk_simple(chunk_path: str, start_sec: float, end_sec: float, m
             suppress_tokens=[-1],  # Suprimir tokens especiais
             without_timestamps=False,  # Manter timestamps
             max_initial_timestamp=1.0,  # Limitar timestamp inicial
-            prepend_punctuations="\"'"¿([{-",  # Configurar pontuação
-            append_punctuations="\"'.。,，!！?？:：")]}、"
+            prepend_punctuations="\"'([{-",  # Configurar pontuação (sem caracteres especiais)
+            append_punctuations="\"'.!?):]}"
         )
         
         segments = []
