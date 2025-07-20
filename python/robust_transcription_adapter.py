@@ -442,16 +442,13 @@ async def main():
             "processing_time_seconds": duration
         }
         
-        # Imprimir resultado como JSON
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        # Imprimir APENAS o texto da transcrição (formato esperado pelo sistema)
+        print(transcription)
         
     except Exception as e:
-        error_result = {
-            "status": "error",
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }
-        print(json.dumps(error_result, ensure_ascii=False, indent=2))
+        logger.error(f"❌ Erro na transcrição: {e}")
+        # Retornar erro no formato esperado
+        print(f"ERRO: {str(e)}")
         sys.exit(1)
 
 if __name__ == "__main__":
