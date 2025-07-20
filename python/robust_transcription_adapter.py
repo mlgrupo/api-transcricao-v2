@@ -442,13 +442,29 @@ async def main():
             "processing_time_seconds": duration
         }
         
-        # Imprimir APENAS o texto da transcrição (formato esperado pelo sistema)
-        print(transcription)
+        # Preparar resultado no formato JSON esperado pelo sistema
+        result = {
+            "status": "success",
+            "text": transcription,
+            "language": "pt",
+            "processing_type": "robust_architecture" if adapter.use_robust_architecture else "current_system",
+            "timestamp": datetime.now().isoformat(),
+            "diarization_available": adapter.use_robust_architecture,
+            "processing_time_seconds": duration
+        }
+        
+        # Imprimir resultado como JSON
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         
     except Exception as e:
         logger.error(f"❌ Erro na transcrição: {e}")
-        # Retornar erro no formato esperado
-        print(f"ERRO: {str(e)}")
+        # Retornar erro no formato JSON esperado
+        error_result = {
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+        print(json.dumps(error_result, ensure_ascii=False, indent=2))
         sys.exit(1)
 
 if __name__ == "__main__":

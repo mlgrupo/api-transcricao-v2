@@ -27,6 +27,7 @@ export interface ProcessingResult {
 export class VideoProcessor {
   private ffmpegPath: string;
   private ffprobePath: string;
+  private processingStartTime: Date;
 
   private folderNameGravacao: string = process.env.FOLDER_NAME_GRAVACAO || "Gravação";
   private folderNameTranscricao: string = process.env.FOLDER_NAME_TRANSCRICAO || 'Transcrição';
@@ -69,6 +70,9 @@ export class VideoProcessor {
     this.logger.info("Pasta do vídeo criada", { videoFolderPath });
 
     try {
+      // Inicializar tempo de processamento
+      this.processingStartTime = new Date();
+      
       // Marcar o vídeo como em processamento
       await this.videoRepository.markVideoAsProcessing(videoId);
       await this.videoRepository.updateProgress(videoId, 5, "Iniciando processamento");
@@ -477,12 +481,68 @@ export class VideoProcessor {
       // Enviar webhook de transcrição concluída
       if (transcription && transcription.trim() && !transcription.trim().startsWith('Não foi possível transcrever este vídeo automaticamente.') && !transcription.trim().startsWith('Este vídeo não pôde ser transcrito devido a um erro técnico')) {
         const configRepo = new ConfigRepository(this.logger);
+        
+        // Buscar informações do vídeo no banco
+        const videoInfo = await this.videoRepository.getVideoById(videoId);
+        
+        // Construir links
+        const videoLink = `https://drive.google.com/file/d/${videoId}/view`;
+        const transcriptionLink = videoInfo?.googleDocsUrl || 'Link não disponível';
+        const videoName = videoInfo?.videoName || 'Vídeo sem nome';
+        
+        // Calcular tempo de processamento
+        const processingEndTime = new Date();
+        const processingDuration = processingEndTime.getTime() - this.processingStartTime.getTime();
+        const processingDurationSeconds = Math.round(processingDuration / 1000);
+        const processingDurationMinutes = Math.round(processingDurationSeconds / 60);
+        
+        // Formatar duração do vídeo (se disponível)
+        let videoDuration = 'Não disponível';
+        let videoDurationSeconds = 0;
+        try {
+          if (videoPath) {
+            const ffprobe = require('fluent-ffmpeg');
+            const getVideoDuration = () => {
+              return new Promise((resolve, reject) => {
+                ffprobe.ffprobe(videoPath, (err: any, metadata: any) => {
+                  if (err) {
+                    reject(err);
+                  } else {
+                    resolve(metadata.format.duration);
+                  }
+                });
+              });
+            };
+            videoDurationSeconds = await getVideoDuration() as number;
+            const hours = Math.floor(videoDurationSeconds / 3600);
+            const minutes = Math.floor((videoDurationSeconds % 3600) / 60);
+            const seconds = Math.floor(videoDurationSeconds % 60);
+            videoDuration = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+          }
+        } catch (durationError) {
+          this.logger.warn('Não foi possível obter duração do vídeo', { videoId, error: durationError });
+        }
+        
         await this.webhookService.sendToAllWebhooks('transcription_completed', {
           videoId,
           userEmail,
+          videoName,
           transcription,
           docFileName: transcriptionDocFileName,
           status: 'transcription_completed',
+          links: {
+            video: videoLink,
+            transcription: transcriptionLink
+          },
+          timing: {
+            videoDuration: videoDuration,
+            videoDurationSeconds: videoDurationSeconds,
+            processingDurationSeconds: processingDurationSeconds,
+            processingDurationMinutes: processingDurationMinutes,
+            processingStartTime: this.processingStartTime.toISOString(),
+            processingEndTime: processingEndTime.toISOString()
+          },
+          timestamp: new Date().toISOString()
         }, configRepo);
       }
 
@@ -528,12 +588,25 @@ export class VideoProcessor {
           });
         }
         const configRepo = new ConfigRepository(this.logger);
+        
+        // Buscar informações do vídeo no banco
+        const videoInfo = await this.videoRepository.getVideoById(videoId);
+        
+        // Construir links
+        const videoLink = `https://drive.google.com/file/d/${videoId}/view`;
+        const videoName = videoInfo?.videoName || 'Vídeo sem nome';
+        
         await this.webhookService.sendToAllWebhooks('transcription_failed', {
           videoId,
           userEmail,
+          videoName,
           error: reconectarMsg,
           status: 'transcription_failed',
           action: 'reconnect_drive',
+          links: {
+            video: videoLink
+          },
+          timestamp: new Date().toISOString()
         }, configRepo);
         try {
           this.logger.info("Limpando arquivos temporários após erro...", {
@@ -583,11 +656,24 @@ export class VideoProcessor {
 
       // Enviar webhook de erro na transcrição
       const configRepo = new ConfigRepository(this.logger);
+      
+      // Buscar informações do vídeo no banco
+      const videoInfo = await this.videoRepository.getVideoById(videoId);
+      
+      // Construir links
+      const videoLink = `https://drive.google.com/file/d/${videoId}/view`;
+      const videoName = videoInfo?.videoName || 'Vídeo sem nome';
+      
       await this.webhookService.sendToAllWebhooks('transcription_failed', {
         videoId,
         userEmail,
+        videoName,
         error: error.message,
         status: 'transcription_failed',
+        links: {
+          video: videoLink
+        },
+        timestamp: new Date().toISOString()
       }, configRepo);
 
       try {
