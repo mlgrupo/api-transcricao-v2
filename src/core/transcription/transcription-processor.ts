@@ -143,7 +143,7 @@ export class TranscriptionProcessor {
     const { stdout, stderr } = await execAsync(command, {
       maxBuffer: 1024 * 1024 * 50,
       encoding: "buffer",
-      timeout: timeoutMs,
+      // timeout: timeoutMs, // Removido para não limitar o tempo de execução
       env,
     });
     const stdoutText = stdout.toString('utf-8');
