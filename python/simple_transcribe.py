@@ -3,6 +3,7 @@
 Transcrição Simples e Robusta
 Processa um chunk por vez, sem erros
 """
+# Configurações otimizadas para máxima velocidade
 import os
 import sys
 import tempfile
@@ -12,13 +13,20 @@ import whisper
 import subprocess
 from pydub import AudioSegment
 import time
+import torch
+
+# Configurações para máxima velocidade
+CHUNK_SIZE_SECONDS = 300  # 5 minutos por chunk (como solicitado)
+WHISPER_MODEL = "medium"  # Modelo rápido
+BEAM_SIZE = 1  # Mínimo para velocidade
+BEST_OF = 1   # Mínimo para velocidade
 
 def log(msg: str):
     timestamp = time.strftime("%H:%M:%S")
     print(f"[{timestamp}] {msg}", file=sys.stderr)
 
 def extract_audio(video_path: str, audio_path: str) -> None:
-    """Extrai áudio do vídeo"""
+    """Extrai áudio do vídeo com configurações otimizadas"""
     log(f"Extraindo áudio de {video_path}")
     
     cmd = [
@@ -27,6 +35,9 @@ def extract_audio(video_path: str, audio_path: str) -> None:
         "-acodec", "pcm_s16le",
         "-ar", "16000",
         "-ac", "1",
+        "-af", "highpass=f=200,lowpass=f=8000,volume=1.5",  # Filtros otimizados + volume
+        "-threads", "8",  # Usar todos os threads
+        "-preset", "ultrafast",  # Preset mais rápido
         audio_path
     ]
     
@@ -38,14 +49,14 @@ def extract_audio(video_path: str, audio_path: str) -> None:
         raise
 
 def split_audio_simple(audio_path: str, out_dir: str) -> list:
-    """Divide áudio em chunks de 5 minutos"""
+    """Divide áudio em chunks de 5 minutos para máxima velocidade"""
     log("Dividindo áudio em chunks de 5 minutos")
     
     audio = AudioSegment.from_wav(audio_path)
     duration_seconds = len(audio) / 1000
     
-    # Chunks de 5 minutos (300 segundos)
-    chunk_size_seconds = 300
+    # Chunks de 5 minutos (300 segundos) para máxima velocidade
+    chunk_size_seconds = CHUNK_SIZE_SECONDS
     n_chunks = max(1, int(duration_seconds / chunk_size_seconds) + 1)
     
     log(f"Duração: {duration_seconds:.1f}s, Chunks: {n_chunks}")
@@ -64,39 +75,73 @@ def split_audio_simple(audio_path: str, out_dir: str) -> list:
         chunk = audio[int(start):int(end)]
         chunk_path = os.path.join(out_dir, f"chunk_{i+1:03d}.wav")
         
-        # Normalizar e salvar
+        # Otimizações para velocidade
         chunk = chunk.set_frame_rate(16000).set_channels(1)
-        chunk.export(chunk_path, format="wav")
+        
+        # Otimizações adicionais de áudio para velocidade
+        chunk = chunk.normalize()  # Normalizar volume
+        chunk = chunk.high_pass_filter(200)  # Filtrar baixas frequências
+        chunk = chunk.low_pass_filter(8000)  # Filtrar altas frequências
+        
+        chunk.export(chunk_path, format="wav", parameters=["-threads", "8"])
         
         chunk_paths.append((chunk_path, start / 1000, end / 1000))
         start = end
     
-    log(f"Criados {len(chunk_paths)} chunks")
+    log(f"Criados {len(chunk_paths)} chunks otimizados")
     return chunk_paths
 
 def transcribe_chunk_simple(chunk_path: str, start_sec: float, end_sec: float, model, chunk_num: int, total_chunks: int) -> dict:
-    """Transcreve um chunk de forma simples"""
+    """Transcreve um chunk com configurações de máxima velocidade"""
     try:
         progress = (chunk_num / total_chunks) * 100
         log(f"Transcrevendo chunk {chunk_num}/{total_chunks} ({progress:.1f}%) - {start_sec:.1f}s a {end_sec:.1f}s")
         
-        # Transcrever com configurações simples
+        # Configurações para máxima velocidade
         result = model.transcribe(
             chunk_path,
-            beam_size=1,
-            best_of=1,
+            beam_size=BEAM_SIZE,
+            best_of=BEST_OF,
             temperature=0.0,
+            compression_ratio_threshold=2.4,
+            logprob_threshold=-1.0,
+            no_speech_threshold=0.6,
+            word_timestamps=True,  # Habilitado para ter timestamps
+            condition_on_previous_text=False,
+            initial_prompt=None,
             verbose=False,
-            fp16=False
+            fp16=False,
+            # Otimizações adicionais para velocidade
+            language="pt",  # Forçar português para velocidade
+            task="transcribe",  # Especificar tarefa
+            suppress_tokens=[-1],  # Suprimir tokens especiais
+            without_timestamps=False,  # Manter timestamps
+            max_initial_timestamp=1.0,  # Limitar timestamp inicial
+            prepend_punctuations="\"'"¿([{-",  # Configurar pontuação
+            append_punctuations="\"'.。,，!！?？:：")]}、"
         )
         
         segments = []
         for seg in result.get("segments", []):
-            segments.append({
+            segment_data = {
                 "start": float(seg["start"]) + start_sec,
                 "end": float(seg["end"]) + start_sec,
                 "text": seg["text"].strip()
-            })
+            }
+            
+            # Incluir timestamps das palavras se disponível
+            if "words" in seg and seg["words"]:
+                segment_data["words"] = []
+                for word in seg["words"]:
+                    word_data = {
+                        "word": word["word"],
+                        "start": float(word["start"]) + start_sec,
+                        "end": float(word["end"]) + start_sec,
+                        "probability": word.get("probability", 0.0)
+                    }
+                    segment_data["words"].append(word_data)
+            
+            segments.append(segment_data)
         
         log(f"Chunk {chunk_num} concluído - {len(segments)} segmentos")
         return {
@@ -149,9 +194,24 @@ def main():
         except:
             pass
         
-        # Carregar modelo UMA VEZ
-        log("Carregando modelo Whisper medium...")
-        model = whisper.load_model("medium", device="cpu")
+        # Carregar modelo UMA VEZ com configurações otimizadas
+        log("Carregando modelo Whisper medium com configurações otimizadas...")
+        model = whisper.load_model(WHISPER_MODEL, device="cpu")
+        
+        # Configurar PyTorch para máxima performance
+        torch.set_num_threads(8)  # Usar todos os cores disponíveis
+        torch.set_default_dtype(torch.float32)
+        
+        # Otimizações adicionais para velocidade
+        torch.backends.cudnn.benchmark = True  # Otimizar convoluções
+        torch.backends.cudnn.deterministic = False  # Permitir otimizações não-determinísticas
+        
+        # Configurar cache de modelo para reutilização
+        if hasattr(model, 'encoder'):
+            model.encoder.eval()  # Modo de avaliação para velocidade
+        if hasattr(model, 'decoder'):
+            model.decoder.eval()  # Modo de avaliação para velocidade
+        
         log("Modelo carregado com sucesso!")
         
         # Transcrever chunks SEQUENCIALMENTE (um por vez)
@@ -175,6 +235,14 @@ def main():
                 os.remove(chunk_path)
             except:
                 pass
+            
+            # Limpeza de memória otimizada
+            if hasattr(torch, 'cuda') and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            # Forçar garbage collection para liberar memória
+            import gc
+            gc.collect()
         
         if not all_segments:
             raise Exception("Nenhum segmento de transcrição gerado!")
@@ -205,7 +273,8 @@ def main():
                 "segments_count": len(all_segments),
                 "total_characters": len(total_text),
                 "language": dominant_language,
-                "chunks_processed": len(chunk_infos)
+                "chunks_processed": len(chunk_infos),
+                "speed_factor": duration_seconds / total_duration
             }
         }
         

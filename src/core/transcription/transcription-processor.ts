@@ -121,7 +121,9 @@ export class TranscriptionProcessor {
         durationSeconds: duration,
         segments: result.segments?.length || 0,
         textLength: transcription.length,
-        metadata: result.metadata
+        hasWordTimestamps: result.segments?.some(seg => seg.words && seg.words.length > 0) || false,
+        metadata: result.metadata,
+        speedFactor: result.metadata?.speed_factor ? `${result.metadata.speed_factor.toFixed(1)}x` : "N/A"
       });
       return transcription;
     } catch (error: any) {
@@ -143,7 +145,17 @@ export class TranscriptionProcessor {
     outputDir?: string,
     videoId?: string
   ): Promise<{ 
-    segments: Array<{ start: number; end: number; text: string; words?: any[] }>;
+    segments: Array<{ 
+      start: number; 
+      end: number; 
+      text: string; 
+      words?: Array<{
+        word: string;
+        start: number;
+        end: number;
+        probability: number;
+      }>;
+    }>;
     metadata?: {
       duration_seconds: number;
       processing_time_seconds: number;
@@ -154,6 +166,7 @@ export class TranscriptionProcessor {
       model_used: string;
       workers_used: number;
       chunks_processed: number;
+      speed_factor?: number;
     };
   }> {
     this.logger.info("Executando script Python simples", { scriptPath, videoPath, outputDir });
@@ -425,7 +438,17 @@ export class TranscriptionProcessor {
 
   private processSegmentsResult(
     result: { 
-      segments: Array<{ start: number; end: number; text: string; words?: any[] }>;
+      segments: Array<{ 
+        start: number; 
+        end: number; 
+        text: string; 
+        words?: Array<{
+          word: string;
+          start: number;
+          end: number;
+          probability: number;
+        }>;
+      }>;
       metadata?: any;
     }, 
     duration: number, 

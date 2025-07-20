@@ -40,11 +40,11 @@ export class TranscriptionQueue {
       return;
     }
     
-    // Configurar limites de recursos para processamento sequencial
+    // Configurar limites de recursos para máxima velocidade
     if (!job.resourceLimit) {
       job.resourceLimit = {
-        maxCpuPercent: 95,  // Máximo 80% CPU por vídeo (6 vCPUs de 7.5)
-        maxMemoryGB: 20     // Máximo 20GB RAM por vídeo (de 28GB total)
+        maxCpuPercent: 100,  // Máximo 100% CPU (todos os 7.5 vCPUs)
+        maxMemoryGB: 26      // Máximo 26GB RAM (de 28GB total)
       };
     }
     
@@ -170,10 +170,10 @@ export class TranscriptionQueue {
    * Verifica se há recursos suficientes para processar um job
    */
   private canProcessJob(job: QueueJob, currentCpuUsage: number, currentMemoryUsage: number): boolean {
-    const requiredCpu = job.resourceLimit?.maxCpuPercent || 80;
-    const requiredMemory = job.resourceLimit?.maxMemoryGB || 20;
+    const requiredCpu = job.resourceLimit?.maxCpuPercent || 100;
+    const requiredMemory = job.resourceLimit?.maxMemoryGB || 26;
     
-    // Limites para processamento sequencial
+    // Limites para máxima velocidade - usar tudo
     const availableCpu = 100 - currentCpuUsage;  // 100% disponível
     const availableMemory = 28 - currentMemoryUsage;
     
@@ -245,8 +245,8 @@ export class TranscriptionQueue {
 
     // Registrar uso de recursos estimado
     this.resourceUsage.set(taskId, {
-      cpuPercent: job.resourceLimit?.maxCpuPercent || 80,
-      memoryGB: job.resourceLimit?.maxMemoryGB || 20
+      cpuPercent: job.resourceLimit?.maxCpuPercent || 100,
+      memoryGB: job.resourceLimit?.maxMemoryGB || 26
     });
 
     this.logger.info('Iniciando processamento do job', { 

@@ -21,7 +21,7 @@ ENV NODE_ENV=production
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 
-# Configurações otimizadas para performance
+# Configurações otimizadas para máxima performance
 ENV OMP_NUM_THREADS=8
 ENV OPENBLAS_NUM_THREADS=8
 ENV MKL_NUM_THREADS=8
@@ -29,8 +29,14 @@ ENV NUMEXPR_NUM_THREADS=8
 ENV PYTORCH_ENABLE_MPS_FALLBACK=1
 ENV WHISPER_TURBO=0
 
-# Configurações de memória para PyTorch
-ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:256
+# Configurações de memória para PyTorch - usar toda RAM disponível
+ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:1024
+ENV PYTORCH_NUM_THREADS=8
+
+# Configurações de recursos - usar tudo
+ENV MAX_CONCURRENT_JOBS=1
+ENV MAX_CPU_PERCENT=100
+ENV MAX_MEMORY_GB=28
 
 # Copia o restante do código
 COPY . .
@@ -47,10 +53,5 @@ RUN python -c "import whisper; whisper.load_model('medium')"
 
 # Cria pasta temporária com permissão total
 RUN mkdir -p /app/temp && chmod 777 /app/temp
-
-# Configurações de recursos
-ENV MAX_CONCURRENT_JOBS=1
-ENV MAX_CPU_PERCENT=100
-ENV MAX_MEMORY_GB=28
 
 CMD ["sh", "-c", "npm start"]
