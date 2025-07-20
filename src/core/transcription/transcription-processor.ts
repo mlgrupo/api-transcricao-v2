@@ -281,7 +281,29 @@ export class TranscriptionProcessor {
               }
               
               if (jsonResult) {
-                resolve(jsonResult);
+                // Converter formato do novo script para o formato esperado
+                const rawResult = jsonResult as any;
+                if (rawResult.status === 'success') {
+                  const result: TranscriptionResult = {
+                    success: true,
+                    segments: rawResult.segments || [],
+                    language: rawResult.language || 'pt',
+                    transcribe_time: 0, // Não disponível no novo formato
+                    audio_duration: 0, // Não disponível no novo formato
+                    total_segments: rawResult.segments?.length || 0,
+                    improved_segments: 0, // Não disponível no novo formato
+                    resources_used: {
+                      cpu_percent: resources.cpuPercent,
+                      memory_percent: resources.memoryPercent,
+                      cpus_per_worker: 4,
+                      max_workers: 2,
+                      ram_per_worker_gb: 13
+                    }
+                  };
+                  resolve(result);
+                } else {
+                  reject(new Error(rawResult.error || 'Erro desconhecido na transcrição'));
+                }
               } else {
                 // Se não encontrou JSON, criar resultado baseado nos logs
                 this.logger.warn('Não foi possível extrair JSON do resultado, criando resultado baseado nos logs');
