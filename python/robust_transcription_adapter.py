@@ -24,15 +24,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Importar componentes da arquitetura robusta
-try:
-    from diarization_orchestrator import DiarizationOrchestrator
-    from resource_manager import ResourceManager
-    ROBUST_ARCHITECTURE_AVAILABLE = True
-    logger.info("✅ Arquitetura robusta disponível")
-except ImportError as e:
-    ROBUST_ARCHITECTURE_AVAILABLE = False
-    logger.warning(f"⚠️ Arquitetura robusta não disponível: {e}")
+# Sistema otimizado (sem diarização)
+ROBUST_ARCHITECTURE_AVAILABLE = True
+logger.info("✅ Sistema otimizado disponível")
 
 # Fallback para sistema atual
 try:
@@ -60,18 +54,10 @@ class RobustTranscriptionAdapter:
     def _initialize_components(self):
         """Inicializa os componentes disponíveis"""
         try:
-            # Tentar inicializar arquitetura robusta
+            # Sistema otimizado (sem diarização)
             if ROBUST_ARCHITECTURE_AVAILABLE:
-                logger.info("🚀 Inicializando arquitetura robusta...")
-                
-                # Inicializar resource manager
-                self.resource_manager = ResourceManager()
-                
-                # Inicializar orchestrator
-                self.robust_orchestrator = DiarizationOrchestrator()
-                
+                logger.info("🚀 Sistema otimizado inicializado")
                 self.use_robust_architecture = True
-                logger.info("✅ Arquitetura robusta inicializada com sucesso")
                 
             else:
                 # Fallback para sistema atual
@@ -99,8 +85,8 @@ class RobustTranscriptionAdapter:
         logger.info(f"🎯 Iniciando transcrição para {audio_path}")
         
         try:
-            if self.use_robust_architecture and self.robust_orchestrator:
-                logger.info("🚀 Usando arquitetura robusta")
+            if self.use_robust_architecture:
+                logger.info("🚀 Usando sistema otimizado")
                 return await self._transcribe_with_robust_architecture(audio_path, video_id)
             else:
                 logger.info("📊 Usando sistema atual")
@@ -343,21 +329,17 @@ class RobustTranscriptionAdapter:
     def get_system_status(self) -> Dict[str, Any]:
         """Retorna status dos sistemas disponíveis"""
         status = {
-            "robust_architecture_available": ROBUST_ARCHITECTURE_AVAILABLE,
+            "optimized_system_available": ROBUST_ARCHITECTURE_AVAILABLE,
             "current_system_available": CURRENT_SYSTEM_AVAILABLE,
-            "using_robust_architecture": self.use_robust_architecture,
-            "resource_manager_available": self.resource_manager is not None,
-            "orchestrator_available": self.robust_orchestrator is not None,
-            "current_pipeline_available": self.current_pipeline is not None
+            "using_optimized_system": self.use_robust_architecture,
+            "current_pipeline_available": self.current_pipeline is not None,
+            "features": {
+                "whisper_turbo": True,
+                "timestamps": True,
+                "diarization": False,  # Desabilitado para velocidade
+                "dynamic_config": True
+            }
         }
-        
-        # Adicionar métricas do resource manager se disponível
-        if self.resource_manager:
-            try:
-                metrics = self.resource_manager.get_metrics()
-                status["resource_metrics"] = metrics
-            except Exception as e:
-                status["resource_metrics_error"] = str(e)
         
         return status
     

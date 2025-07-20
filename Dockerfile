@@ -29,24 +29,12 @@ COPY . .
 # Build do projeto Node.js
 RUN npm run build
 
-# Instala dependências Python básicas
+# Instala dependências Python otimizadas (apenas o essencial)
 RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r python/requirements.txt
+    pip install --no-cache-dir -r python/requirements-simple.txt
 
 # Instala PyTorch CPU (otimizado para servidor)
 RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-
-# Instala dependências da arquitetura robusta
-RUN pip install --no-cache-dir -r python/requirements-robust.txt
-
-# Instala dependências adicionais necessárias
-RUN pip install --no-cache-dir \
-    faster-whisper \
-    pyannote.core \
-    pyannote.metrics \
-    resampy \
-    audioread \
-    multiprocessing-logging
 
 # Cria pastas necessárias com permissões
 RUN mkdir -p /app/temp && \

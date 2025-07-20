@@ -53,12 +53,12 @@ nano .env  # Editar com suas configurações
 NODE_ENV=production
 PORT=8080
 
-# === BANCO DE DADOS ===
-DB_HOST=postgres
+# === BANCO DE DADOS (SEU BANCO EXISTENTE) ===
+DB_HOST=seu_host_postgres_aqui
 DB_PORT=5432
-DB_NAME=transcricao_db
-DB_USER=postgres
-DB_PASSWORD=sua_senha_super_segura_123
+DB_NAME=seu_banco_aqui
+DB_USER=seu_usuario_aqui
+DB_PASSWORD=sua_senha_aqui
 
 # === GOOGLE DRIVE API ===
 GOOGLE_CLIENT_ID=seu_client_id_aqui
@@ -84,7 +84,7 @@ LOG_LEVEL=info
 
 ### **3. Deploy com Docker:**
 ```bash
-# Build e start
+# Build e start (apenas backend - sem PostgreSQL)
 docker-compose up -d --build
 
 # Verificar status
@@ -245,10 +245,10 @@ sudo ufw status
 ## ✅ **Checklist de Deploy:**
 
 - [ ] Docker e Docker Compose instalados
-- [ ] Arquivo .env configurado
+- [ ] Arquivo .env configurado com seu banco PostgreSQL
 - [ ] Credenciais do Google Drive configuradas
-- [ ] Banco PostgreSQL rodando
-- [ ] Containers iniciados com sucesso
+- [ ] Seu banco PostgreSQL acessível
+- [ ] Container backend iniciado com sucesso
 - [ ] Health check passando
 - [ ] Teste de transcrição funcionando
 - [ ] Logs sem erros críticos
