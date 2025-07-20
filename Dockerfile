@@ -9,6 +9,8 @@ RUN apt-get update && \
 
 # Copia pacotes e instala dependências Node.js
 COPY package.json package-lock.json* ./
+RUN npm install
+
 ENV NODE_ENV=production
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1

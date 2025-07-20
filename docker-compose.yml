@@ -1,24 +1,6 @@
 version: '3.8'
 
 services:
-  postgres:
-    image: postgres:15
-    container_name: postgres_db
-    environment:
-      POSTGRES_DB: ${DB_NAME:-transcricao_db}
-      POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    restart: always
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
   backend:
     container_name: backend_api
     build:
@@ -27,15 +9,10 @@ services:
     env_file:
       - .env
     ports:
-      - "8080:8080"
+      - "9898:9898"
     restart: always
-    depends_on:
-      postgres:
-        condition: service_healthy
     volumes:
       - ./temp:/app/temp
-      - ./python/models:/app/python/models
-      - ./python/outputs:/app/python/outputs
     deploy:
       resources:
         limits:
@@ -49,10 +26,7 @@ services:
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app/python
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9898/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-
-volumes:
-  postgres_data:
