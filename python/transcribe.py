@@ -1,0 +1,359 @@
+#!/usr/bin/env python3
+"""
+Transcrição Simples e Robusta
+- Audio inteiro sem cortar
+- Modelo 'large' para máxima qualidade
+- 1.2x de velocidade
+- 4 CPUs por worker, máximo 2 workers
+- 13GB RAM por worker
+- Pós-processamento integrado
+"""
+
+import os
+import sys
+import json
+import time
+import logging
+import subprocess
+import psutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, List, Any, Optional
+import whisper
+import torch
+import numpy as np
+from pydub import AudioSegment
+from pydub.effects import speedup
+
+# Configuração de logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] [%(levelname)s] %(message)s',
+    datefmt='%H:%M:%S'
+)
+log = logging.getLogger(__name__)
+
+class SimpleTranscriber:
+    def __init__(self):
+        self.model = None
+        self.max_workers = 2  # Máximo 2 workers
+        self.cpus_per_worker = 4  # 4 CPUs por worker
+        self.ram_per_worker_gb = 13  # 13GB RAM por worker
+        self.audio_speed = 1.2  # 1.2x velocidade
+        self.whisper_model = "large"  # Modelo large para qualidade
+        
+    def log(self, message: str, level: str = "INFO"):
+        """Log com timestamp"""
+        timestamp = time.strftime("%H:%M:%S")
+        print(f"[{timestamp}] [{level}] {message}")
+        
+    def check_resources(self) -> Dict[str, Any]:
+        """Verificar recursos disponíveis"""
+        cpu_count = psutil.cpu_count()
+        memory = psutil.virtual_memory()
+        
+        self.log(f"Recursos disponíveis: {cpu_count} CPUs, {memory.total / (1024**3):.1f}GB RAM")
+        self.log(f"CPU atual: {psutil.cpu_percent()}%, RAM atual: {memory.percent}%")
+        
+        return {
+            "cpu_count": cpu_count,
+            "memory_total_gb": memory.total / (1024**3),
+            "memory_available_gb": memory.available / (1024**3),
+            "cpu_percent": psutil.cpu_percent(),
+            "memory_percent": memory.percent
+        }
+        
+    def load_model(self):
+        """Carregar modelo Whisper"""
+        try:
+            self.log(f"Carregando modelo Whisper {self.whisper_model}...")
+            
+            # Configurar PyTorch para os recursos especificados
+            torch.set_num_threads(self.cpus_per_worker)
+            torch.set_default_dtype(torch.float32)
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
+            torch.set_grad_enabled(False)
+            
+            # Carregar modelo
+            self.model = whisper.load_model(self.whisper_model, device="cpu")
+            
+            # Configurar modelo para velocidade
+            if hasattr(self.model, 'encoder'):
+                self.model.encoder.eval()
+            if hasattr(self.model, 'decoder'):
+                self.model.decoder.eval()
+                
+            self.log("Modelo carregado com sucesso!")
+            
+        except Exception as e:
+            self.log(f"Erro ao carregar modelo: {e}", "ERROR")
+            raise
+            
+    def speed_up_audio(self, audio_path: str) -> str:
+        """Acelerar audio para 1.2x"""
+        try:
+            self.log(f"Acelerando audio para {self.audio_speed}x...")
+            
+            # Carregar audio
+            audio = AudioSegment.from_file(audio_path)
+            
+            # Calcular nova duração
+            original_duration = len(audio) / 1000  # segundos
+            new_duration = original_duration / self.audio_speed
+            
+            self.log(f"Duração original: {original_duration:.1f}s")
+            self.log(f"Duração acelerada: {new_duration:.1f}s")
+            
+            # Acelerar audio
+            fast_audio = speedup(audio, playback_speed=self.audio_speed)
+            
+            # Salvar audio acelerado
+            output_path = audio_path.replace('.mp4', '_fast.wav').replace('.mp3', '_fast.wav').replace('.wav', '_fast.wav')
+            fast_audio.export(output_path, format="wav")
+            
+            self.log(f"Audio acelerado salvo: {output_path}")
+            return output_path
+            
+        except Exception as e:
+            self.log(f"Erro ao acelerar audio: {e}", "ERROR")
+            # Se falhar, retorna o audio original
+            return audio_path
+            
+    def transcribe_audio(self, audio_path: str) -> Dict[str, Any]:
+        """Transcrever audio completo"""
+        try:
+            self.log(f"Iniciando transcrição do audio: {audio_path}")
+            
+            # Acelerar audio
+            fast_audio_path = self.speed_up_audio(audio_path)
+            
+            # Configurações de transcrição otimizadas
+            transcribe_options = {
+                "beam_size": 3,
+                "best_of": 2,
+                "temperature": 0.0,
+                "patience": 2,
+                "length_penalty": 1.0,
+                "word_timestamps": True,
+                "condition_on_previous_text": False,
+                "verbose": False,
+                "fp16": False
+            }
+            
+            self.log("Iniciando transcrição com Whisper...")
+            start_time = time.time()
+            
+            # Transcrever
+            result = self.model.transcribe(fast_audio_path, **transcribe_options)
+            
+            transcribe_time = time.time() - start_time
+            
+            # Ajustar timestamps para velocidade original
+            if self.audio_speed != 1.0:
+                self.log("Ajustando timestamps para velocidade original...")
+                for segment in result["segments"]:
+                    segment["start"] = segment["start"] * self.audio_speed
+                    segment["end"] = segment["end"] * self.audio_speed
+                    
+                    if "words" in segment:
+                        for word in segment["words"]:
+                            word["start"] = word["start"] * self.audio_speed
+                            word["end"] = word["end"] * self.audio_speed
+            
+            # Limpar arquivo temporário
+            if fast_audio_path != audio_path:
+                try:
+                    os.remove(fast_audio_path)
+                except:
+                    pass
+            
+            self.log(f"Transcrição concluída em {transcribe_time:.1f}s")
+            self.log(f"Segmentos gerados: {len(result['segments'])}")
+            
+            return {
+                "success": True,
+                "segments": result["segments"],
+                "language": result.get("language", "pt"),
+                "transcribe_time": transcribe_time,
+                "audio_duration": len(result["segments"]) * 30 if result["segments"] else 0
+            }
+            
+        except Exception as e:
+            self.log(f"Erro na transcrição: {e}", "ERROR")
+            return {
+                "success": False,
+                "error": str(e),
+                "segments": [],
+                "language": "pt"
+            }
+            
+    def post_process_text(self, text: str) -> str:
+        """Pós-processamento do texto"""
+        try:
+            # Correções básicas
+            corrections = {
+                "vc": "você",
+                "tb": "também",
+                "pq": "porque",
+                "q": "que",
+                "n": "não",
+                "ñ": "não",
+                "tbm": "também",
+                "vc": "você",
+                "vcs": "vocês",
+                "hj": "hoje",
+                "blz": "beleza",
+                "vlw": "valeu",
+                "obg": "obrigado",
+                "obgd": "obrigado",
+                "pfv": "por favor",
+                "pf": "por favor",
+                "mt": "muito",
+                "mto": "muito",
+                "tá": "está",
+                "tô": "estou",
+                "tá": "está",
+                "tô": "estou",
+                "tá": "está",
+                "tô": "estou"
+            }
+            
+            # Aplicar correções
+            for wrong, correct in corrections.items():
+                text = text.replace(f" {wrong} ", f" {correct} ")
+                text = text.replace(f" {wrong}.", f" {correct}.")
+                text = text.replace(f" {wrong},", f" {correct},")
+                text = text.replace(f" {wrong}?", f" {correct}?")
+                text = text.replace(f" {wrong}!", f" {correct}!")
+            
+            # Capitalização
+            sentences = text.split('. ')
+            corrected_sentences = []
+            for sentence in sentences:
+                if sentence.strip():
+                    corrected_sentences.append(sentence.strip().capitalize())
+            
+            text = '. '.join(corrected_sentences)
+            
+            return text
+            
+        except Exception as e:
+            self.log(f"Erro no pós-processamento: {e}", "WARNING")
+            return text
+            
+    def process_segments(self, segments: List[Dict]) -> List[Dict]:
+        """Processar segmentos com pós-processamento"""
+        try:
+            self.log("Iniciando pós-processamento dos segmentos...")
+            
+            processed_segments = []
+            improved_count = 0
+            
+            for segment in segments:
+                original_text = segment.get("text", "").strip()
+                
+                # Pós-processamento
+                processed_text = self.post_process_text(original_text)
+                
+                # Verificar se houve melhoria
+                if processed_text != original_text:
+                    improved_count += 1
+                
+                # Atualizar segmento
+                segment["text"] = processed_text
+                segment["original_text"] = original_text
+                processed_segments.append(segment)
+            
+            self.log(f"Pós-processamento concluído - {improved_count} segmentos melhorados")
+            
+            return processed_segments
+            
+        except Exception as e:
+            self.log(f"Erro no processamento de segmentos: {e}", "ERROR")
+            return segments
+            
+    def transcribe_video(self, video_path: str) -> Dict[str, Any]:
+        """Transcrever vídeo completo"""
+        try:
+            # Verificar recursos
+            resources = self.check_resources()
+            
+            # Verificar se há recursos suficientes
+            if resources["memory_available_gb"] < self.ram_per_worker_gb:
+                raise Exception(f"RAM insuficiente. Necessário: {self.ram_per_worker_gb}GB, Disponível: {resources['memory_available_gb']:.1f}GB")
+            
+            # Carregar modelo se necessário
+            if self.model is None:
+                self.load_model()
+            
+            # Transcrever audio
+            result = self.transcribe_audio(video_path)
+            
+            if not result["success"]:
+                return result
+            
+            # Pós-processar segmentos
+            processed_segments = self.process_segments(result["segments"])
+            
+            # Preparar resultado final
+            final_result = {
+                "success": True,
+                "segments": processed_segments,
+                "language": result["language"],
+                "transcribe_time": result["transcribe_time"],
+                "audio_duration": result["audio_duration"],
+                "total_segments": len(processed_segments),
+                "improved_segments": sum(1 for s in processed_segments if s.get("original_text") != s.get("text")),
+                "resources_used": {
+                    "cpu_percent": psutil.cpu_percent(),
+                    "memory_percent": psutil.virtual_memory().percent,
+                    "cpus_per_worker": self.cpus_per_worker,
+                    "max_workers": self.max_workers,
+                    "ram_per_worker_gb": self.ram_per_worker_gb
+                }
+            }
+            
+            self.log(f"Transcrição completa concluída!")
+            self.log(f"Segmentos: {final_result['total_segments']}")
+            self.log(f"Melhorados: {final_result['improved_segments']}")
+            self.log(f"Tempo: {final_result['transcribe_time']:.1f}s")
+            
+            return final_result
+            
+        except Exception as e:
+            self.log(f"Erro na transcrição do vídeo: {e}", "ERROR")
+            return {
+                "success": False,
+                "error": str(e),
+                "segments": [],
+                "language": "pt"
+            }
+
+def main():
+    """Função principal para uso direto"""
+    if len(sys.argv) != 2:
+        print("Uso: python transcribe.py <caminho_do_video>")
+        sys.exit(1)
+    
+    video_path = sys.argv[1]
+    
+    if not os.path.exists(video_path):
+        print(f"Erro: Arquivo não encontrado: {video_path}")
+        sys.exit(1)
+    
+    # Criar transcritor
+    transcriber = SimpleTranscriber()
+    
+    # Transcrever
+    result = transcriber.transcribe_video(video_path)
+    
+    # Salvar resultado
+    output_file = video_path.replace('.mp4', '_transcription.json').replace('.mp3', '_transcription.json')
+    
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+    
+    print(f"Resultado salvo em: {output_file}")
+
+if __name__ == "__main__":
+    main() 

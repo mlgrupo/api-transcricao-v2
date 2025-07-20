@@ -159,21 +159,18 @@ export class VideoProcessor {
 
       // Download do vídeo já foi feito em videoPath
       // Não precisa mais converter para MP3
-      // Transcrever vídeo diretamente
-      this.logger.info("🎯 Iniciando transcrição do vídeo", { videoId });
-      
-      const transcription = await this.transcriptionProcessor.transcribeVideo(
-        videoPath,
-        videoFolderPath,
-        videoId
-      );
+      // Transcrever vídeo usando método de compatibilidade
+      const transcription = await this.transcriptionProcessor.transcribeVideoLegacy(videoPath, videoFolderPath, videoId);
+
+      // Atualizar progresso
+      await this.videoRepository.updateProgress(videoId, 80, "Transcrição concluída");
 
       await this.logger.info(
         `✅ Transcrição concluída para o vídeo ${videoId}`,
         {
           videoId,
           userEmail,
-          transcription,
+          transcription: transcription,
         }
       );
 
@@ -348,7 +345,7 @@ export class VideoProcessor {
 
         await this.webhookService.sendNotification(webhookUrl, {
           status: "success",
-          transcription,
+          transcription: transcription,
           videoId,
           userEmail,
           docFileName: transcriptionDocFileName,
@@ -404,7 +401,7 @@ export class VideoProcessor {
           videoId,
           userEmail,
           videoName,
-          transcription,
+          transcription: transcription,
           docFileName: transcriptionDocFileName,
           status: 'transcription_completed',
           links: {
@@ -429,7 +426,7 @@ export class VideoProcessor {
 
       return {
         success: true,
-        transcription,
+        transcription: transcription,
       };
     } catch (error: any) {
       this.logger.error("Erro no processamento do vídeo:", {
