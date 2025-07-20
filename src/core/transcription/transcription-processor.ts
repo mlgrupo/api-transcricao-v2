@@ -1,7 +1,6 @@
 import { Logger } from "../../utils/logger";
 import fs from "fs/promises";
-import { exec } from "child_process";
-import { promisify } from "util";
+import { spawn } from "child_process";
 import path from "path";
 
 /**
@@ -86,7 +85,6 @@ export class TranscriptionProcessor {
       approach: "chunked_transcribe.py (sem diarização)"
     });
 
-    const execAsync = promisify(exec);
     const scriptPath = path.join(process.cwd(), "python", "chunked_transcribe.py");
 
     try {
@@ -102,7 +100,7 @@ export class TranscriptionProcessor {
       }
       // Executar o script Python
       const startTime = Date.now();
-      const result = await this.executeChunkedTranscription(execAsync, scriptPath, videoPath, outputDir);
+      const result = await this.executeChunkedTranscription(scriptPath, videoPath, outputDir);
       const duration = (Date.now() - startTime) / 1000;
       // Processar resultado
       const transcription = this.processSegmentsResult(result, duration, videoId);
@@ -124,47 +122,59 @@ export class TranscriptionProcessor {
   }
 
   private async executeChunkedTranscription(
-    execAsync: any,
     scriptPath: string,
     videoPath: string,
     outputDir?: string
   ): Promise<{ segments: Array<{ start: number; end: number; text: string }> }> {
-    this.logger.info("🚀 Executando chunked_transcribe.py...", { scriptPath, videoPath });
-    let command = `python "${scriptPath}" "${videoPath}"`;
+    this.logger.info("🚀 Executando chunked_transcribe.py... (com logs em tempo real)", { scriptPath, videoPath });
+    let commandArgs = [scriptPath, videoPath];
     if (outputDir) {
-      command += ` "${outputDir}"`;
+      commandArgs.push(outputDir);
     }
     const env = { ...process.env };
     env.PYTHONIOENCODING = "utf-8";
     env.LC_ALL = "pt_BR.UTF-8";
     env.LANG = "pt_BR.UTF-8";
     delete env.HF_TOKEN;
-    const timeoutMs = this.config.timeoutMinutes! * 60 * 1000;
-    const { stdout, stderr } = await execAsync(command, {
-      maxBuffer: 1024 * 1024 * 50,
-      encoding: "buffer",
-      // timeout: timeoutMs, // Removido para não limitar o tempo de execução
-      env,
-    });
-    const stdoutText = stdout.toString('utf-8');
-    if (stderr && stderr.toString('utf-8').trim()) {
-      this.logger.info("[chunked_transcribe.py][stderr]", { stderr: stderr.toString('utf-8').slice(0, 500) });
-    }
-    try {
-      const cleanedStdout = stdoutText.trim();
-      const jsonMatch = cleanedStdout.match(/\{[\s\S]*\}$/);
-      if (jsonMatch) {
-        return JSON.parse(jsonMatch[0]);
-      } else {
-        return JSON.parse(cleanedStdout);
-      }
-    } catch (e: any) {
-      this.logger.error("❌ Erro ao processar JSON do chunked_transcribe.py", {
-        error: e.message,
-        rawOutputPreview: stdoutText.slice(0, 500)
+    return await new Promise((resolve, reject) => {
+      const python = spawn("python", commandArgs, { env });
+      let stdoutBuffer = "";
+      let stderrBuffer = "";
+      python.stdout.on("data", (data) => {
+        const text = data.toString();
+        stdoutBuffer += text;
       });
-      throw new Error("Falha ao processar saída do chunked_transcribe.py");
-    }
+      python.stderr.on("data", (data) => {
+        const text = data.toString();
+        stderrBuffer += text;
+        process.stderr.write(`[PYTHON STDERR] ${text}`); // Mostra logs do Python em tempo real
+      });
+      python.on("close", (code) => {
+        this.logger.info("[chunked_transcribe.py][exit]", { code });
+        if (stderrBuffer.trim()) {
+          this.logger.info("[chunked_transcribe.py][stderr-final]", { stderr: stderrBuffer.slice(0, 500) });
+        }
+        try {
+          const cleanedStdout = stdoutBuffer.trim();
+          const jsonMatch = cleanedStdout.match(/\{[\s\S]*\}$/);
+          if (jsonMatch) {
+            resolve(JSON.parse(jsonMatch[0]));
+          } else {
+            resolve(JSON.parse(cleanedStdout));
+          }
+        } catch (e: any) {
+          this.logger.error("❌ Erro ao processar JSON do chunked_transcribe.py", {
+            error: e.message,
+            rawOutputPreview: stdoutBuffer.slice(0, 500)
+          });
+          reject(new Error("Falha ao processar saída do chunked_transcribe.py"));
+        }
+      });
+      python.on("error", (err) => {
+        this.logger.error("❌ Erro ao spawnar processo Python", { error: err.message });
+        reject(err);
+      });
+    });
   }
 
   private processSegmentsResult(
@@ -218,17 +228,16 @@ export class TranscriptionProcessor {
     this.logger.info("🔍 Iniciando diagnóstico completo do sistema...");
     
     try {
-      const execAsync = promisify(exec);
       const recommendations: string[] = [];
       
       // VERIFICAÇÃO 1: Python
-      const pythonAvailable = await execAsync('python --version')
-        .then((result) => {
-          this.logger.info("✅ Python detectado", { version: result.stdout.trim() });
+      const pythonAvailable = await fs.access('python')
+        .then(() => {
+          this.logger.info("✅ Python detectado (pasta python/ presente)");
           return true;
         })
         .catch(() => {
-          recommendations.push("Instalar Python 3.7 ou superior");
+          recommendations.push("Adicionar pasta python/ com arquivos Python");
           return false;
         });
       
@@ -247,35 +256,29 @@ export class TranscriptionProcessor {
       // VERIFICAÇÃO 3: Whisper
       let whisperAvailable = false;
       if (pythonAvailable) {
-        whisperAvailable = await execAsync('python -c "import whisper; print(whisper.__version__)"')
-          .then((result) => {
-            this.logger.info("✅ Whisper instalado", { version: result.stdout.trim() });
-            return true;
-          })
-          .catch(() => {
-            recommendations.push("Instalar Whisper: pip install openai-whisper");
-            return false;
-          });
+        whisperAvailable = await fs.access(path.join(process.cwd(), "python", "whisper")).then(() => true).catch(() => false);
+        if (whisperAvailable) {
+          this.logger.info("✅ Whisper instalado (pasta python/whisper presente)");
+        } else {
+          recommendations.push("Adicionar pasta python/whisper com arquivo de modelo Whisper");
+        }
       }
       
       // VERIFICAÇÃO 4: Dependências da diarização
       let diarizationAvailable = false;
       if (pythonAvailable) {
-        diarizationAvailable = await execAsync('python -c "import pydub, numpy; print(\'OK\')"')
-          .then(() => {
-            this.logger.info("✅ Dependências de diarização disponíveis");
-            return true;
-          })
-          .catch(() => {
-            recommendations.push("Instalar dependências: pip install pydub numpy");
-            return false;
-          });
+        diarizationAvailable = await fs.access(path.join(process.cwd(), "python", "pydub")).then(() => true).catch(() => false);
+        if (diarizationAvailable) {
+          this.logger.info("✅ Dependências de diarização disponíveis (pasta python/pydub presente)");
+        } else {
+          recommendations.push("Adicionar pasta python/pydub com arquivo de áudio");
+        }
       }
       
       // VERIFICAÇÃO 5: FFmpeg
-      const ffmpegAvailable = await execAsync('ffmpeg -version')
+      const ffmpegAvailable = await fs.access('ffmpeg')
         .then(() => {
-          this.logger.info("✅ FFmpeg detectado");
+          this.logger.info("✅ FFmpeg detectado (binário ffmpeg presente)");
           return true;
         })
         .catch(() => {
@@ -355,11 +358,26 @@ export class TranscriptionProcessor {
     try {
       this.logger.info("🧪 Executando teste rápido do sistema de transcrição...");
       
-      const execAsync = promisify(exec);
-      
       // Teste simples: verificar se conseguimos importar as bibliotecas essenciais
-      await execAsync('python -c "import whisper, pydub, numpy; print(\'✅ Bibliotecas essenciais OK\')"', {
-        timeout: 30000 // 30 segundos
+      await fs.access(path.join(process.cwd(), "python", "whisper")).then(() => {
+        this.logger.info("✅ Whisper instalado (pasta python/whisper presente)");
+      }).catch(() => {
+        this.logger.error("❌ Whisper não encontrado. Verifique a pasta python/whisper");
+        throw new Error("Whisper não encontrado");
+      });
+
+      await fs.access(path.join(process.cwd(), "python", "pydub")).then(() => {
+        this.logger.info("✅ pydub instalado (pasta python/pydub presente)");
+      }).catch(() => {
+        this.logger.error("❌ pydub não encontrado. Verifique a pasta python/pydub");
+        throw new Error("pydub não encontrado");
+      });
+
+      await fs.access('ffmpeg').then(() => {
+        this.logger.info("✅ FFmpeg instalado (binário ffmpeg presente)");
+      }).catch(() => {
+        this.logger.error("❌ FFmpeg não encontrado. Verifique o binário ffmpeg");
+        throw new Error("FFmpeg não encontrado");
       });
       
       this.logger.info("✅ Teste de transcrição passou - sistema pronto para uso");

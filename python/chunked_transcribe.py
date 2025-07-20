@@ -12,9 +12,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 
 # Configurações
-MAX_CHUNKS = 4
-MAX_CONCURRENT_CHUNKS = 1  # Limitar para máxima estabilidade em CPU
-WHISPER_MODEL = "large"
+MAX_CHUNKS = 8
+MAX_CONCURRENT_CHUNKS = 2 # Limitar para máxima estabilidade em CPU
+WHISPER_MODEL = "medium"
+
+USE_TURBO = os.environ.get("WHISPER_TURBO", "0") == "1"
+
+if USE_TURBO:
+    from faster_whisper import WhisperModel
+    TURBO_MODEL = None
+else:
+    import whisper
+    TURBO_MODEL = None
 
 def log(msg):
     print(f"[chunked_transcribe] {msg}", file=sys.stderr)
@@ -54,16 +63,30 @@ def split_audio(audio_path, out_dir, max_chunks=MAX_CHUNKS):
 def transcribe_chunk(chunk_path, start_sec, end_sec, model):
     log(f"Transcrevendo chunk {chunk_path} ({start_sec:.1f}s - {end_sec:.1f}s)...")
     try:
-        result = model.transcribe(chunk_path, word_timestamps=True, verbose=False, fp16=False)
-        segments = []
-        for seg in result.get("segments", []):
-            segments.append({
-                "start": float(seg["start"]) + start_sec,
-                "end": float(seg["end"]) + start_sec,
-                "text": seg["text"].strip()
-            })
-        del result
-        return {"segments": segments, "chunk": os.path.basename(chunk_path)}
+        if USE_TURBO:
+            global TURBO_MODEL
+            if TURBO_MODEL is None:
+                TURBO_MODEL = WhisperModel("large-v2", device="cpu", compute_type="int8")
+            segments, info = TURBO_MODEL.transcribe(chunk_path, beam_size=5, word_timestamps=True)
+            segs = []
+            for seg in segments:
+                segs.append({
+                    "start": float(seg.start) + start_sec,
+                    "end": float(seg.end) + start_sec,
+                    "text": seg.text.strip()
+                })
+            return {"segments": segs, "chunk": os.path.basename(chunk_path)}
+        else:
+            result = model.transcribe(chunk_path, word_timestamps=True, verbose=False, fp16=False)
+            segments = []
+            for seg in result.get("segments", []):
+                segments.append({
+                    "start": float(seg["start"]) + start_sec,
+                    "end": float(seg["end"]) + start_sec,
+                    "text": seg["text"].strip()
+                })
+            del result
+            return {"segments": segments, "chunk": os.path.basename(chunk_path)}
     except Exception as e:
         log(f"Erro ao transcrever chunk {chunk_path}: {e}")
         return {"segments": [], "chunk": os.path.basename(chunk_path), "error": str(e)}
@@ -96,8 +119,13 @@ def main():
         except Exception as e:
             log(f"Não foi possível apagar áudio: {e}")
         log("Carregando modelo Whisper...")
-        model = whisper.load_model(WHISPER_MODEL, device="cpu")
-        torch.set_default_dtype(torch.float32)  # Forçar FP32
+        if USE_TURBO:
+            model = None  # handled in transcribe_chunk
+            log("Modo TURBO: usando faster-whisper (large-v2, int8, CPU)")
+        else:
+            model = whisper.load_model(WHISPER_MODEL, device="cpu")
+            torch.set_default_dtype(torch.float32)  # Forçar FP32
+            log("Modelo Whisper padrão carregado.")
         log("Modelo carregado. Iniciando transcrição dos chunks...")
         results = []
         with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_CHUNKS) as executor:

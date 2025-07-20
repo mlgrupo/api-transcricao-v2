@@ -1,4 +1,5 @@
 openai-whisper
+faster-whisper
 pydub
 torch
 ffmpeg-python
