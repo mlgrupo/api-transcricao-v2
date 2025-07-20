@@ -1,4 +1,4 @@
-import { Repository } from "typeorm";
+import { Repository, Not, IsNull } from "typeorm";
 import { AppDataSource } from "../data-source";
 import { Video } from "../../domain/models/Video";
 import { Logger } from "../../utils/logger";
@@ -392,7 +392,12 @@ export class VideoRepository {
 
   async getLastVideoByUserAndFolder(userId: string, folderId: string) {
     return this.repository.findOne({
-      where: { usuarioId: userId, pastaId: folderId },
+      where: { 
+        usuarioId: userId, 
+        pastaId: folderId,
+        // Apenas vídeos que foram efetivamente salvos (não com erro)
+        transcrito: Not('ERRO')
+      },
       order: { createdTime: 'DESC' }
     });
   }

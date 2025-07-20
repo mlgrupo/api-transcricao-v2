@@ -21,7 +21,7 @@ export class JobScheduler {
   }
 
   private setupDriveWatcherJob(): void {
-    // Polling leve a cada 1 minuto (ajustado para busca mais frequente)
+    // Polling leve a cada 5 minutos (reduzido para evitar sobrecarga)
     const pollJob = new CronJob(
       '*/1 * * * *',
       async () => {

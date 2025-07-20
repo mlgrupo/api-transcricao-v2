@@ -1,3 +1,8 @@
+#!/usr/bin/env python3
+"""
+Sistema de Transcrição Ultra-Otimizado para Alta Performance
+Configurado para: 7.5 vCPUs, 28GB RAM
+"""
 import os
 import sys
 import tempfile
@@ -10,160 +15,370 @@ import subprocess
 from pydub import AudioSegment
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
+import psutil
+import time
+from typing import List, Tuple, Dict, Any
 
-# Configurações
-MIN_CHUNK_SECONDS = 30
-IDEAL_CHUNK_SECONDS = 1800  # 30 minutos
-MAX_CHUNKS = 12  # Limite superior para vídeos muito longos
-MAX_CONCURRENT_CHUNKS = 1  # Processar apenas um chunk por vez, sempre na ordem
-WHISPER_MODEL = "medium"
+# Configurações otimizadas para 7.5 vCPUs e 28GB RAM
+MAX_WORKERS = 6  # 6 workers para 7.5 vCPUs (deixa 1.5 para sistema)
+MAX_MEMORY_GB = 26  # 26GB para transcrição (deixa 2GB para sistema)
+CHUNK_SIZE_MB = 50  # Tamanho ideal de chunk para processamento
+MIN_CHUNK_SECONDS = 60  # Mínimo 1 minuto por chunk
+MAX_CHUNK_SECONDS = 1800  # Máximo 30 minutos por chunk
+WHISPER_MODEL = "large-v3"  # Melhor qualidade
+USE_TURBO = os.environ.get("WHISPER_TURBO", "1") == "1"
 
-USE_TURBO = os.environ.get("WHISPER_TURBO", "0") == "1"
+# Configurações de qualidade
+QUALITY_CONFIGS = {
+    "fast": {
+        "model": "medium",
+        "beam_size": 3,
+        "best_of": 2,
+        "temperature": 0.0,
+        "compression_ratio_threshold": 2.4,
+        "logprob_threshold": -1.0,
+        "no_speech_threshold": 0.6
+    },
+    "balanced": {
+        "model": "large-v3",
+        "beam_size": 5,
+        "best_of": 3,
+        "temperature": 0.0,
+        "compression_ratio_threshold": 2.4,
+        "logprob_threshold": -1.0,
+        "no_speech_threshold": 0.6
+    },
+    "high_quality": {
+        "model": "large-v3",
+        "beam_size": 7,
+        "best_of": 5,
+        "temperature": 0.0,
+        "compression_ratio_threshold": 2.4,
+        "logprob_threshold": -1.0,
+        "no_speech_threshold": 0.6
+    }
+}
 
-if USE_TURBO:
-    from faster_whisper import WhisperModel
-    TURBO_MODEL = None
-else:
-    import whisper
-    TURBO_MODEL = None
+def log(msg: str, level: str = "INFO"):
+    timestamp = time.strftime("%H:%M:%S")
+    print(f"[{timestamp}] [{level}] {msg}", file=sys.stderr)
 
-def log(msg):
-    print(f"[chunked_transcribe] {msg}", file=sys.stderr)
+def get_optimal_config(duration_seconds: float) -> Dict[str, Any]:
+    """Determina configuração ideal baseada na duração do áudio"""
+    if duration_seconds < 300:  # < 5 minutos
+        return QUALITY_CONFIGS["high_quality"]
+    elif duration_seconds < 1800:  # < 30 minutos
+        return QUALITY_CONFIGS["balanced"]
+    else:  # > 30 minutos
+        return QUALITY_CONFIGS["fast"]
 
-# Utilitário para extrair áudio do vídeo
-def extract_audio(video_path, audio_path):
-    log(f"Extraindo áudio de {video_path} para {audio_path}")
+def get_optimal_chunk_size(duration_seconds: float) -> int:
+    """Calcula tamanho ideal de chunk baseado na duração"""
+    if duration_seconds < 300:  # < 5 minutos
+        return min(duration_seconds, 300)  # Chunk único ou máximo 5 min
+    elif duration_seconds < 1800:  # < 30 minutos
+        return min(duration_seconds / 2, 600)  # 2 chunks ou máximo 10 min
+    else:  # > 30 minutos
+        return min(duration_seconds / 4, 900)  # 4+ chunks ou máximo 15 min
+
+def extract_audio(video_path: str, audio_path: str) -> None:
+    """Extrai áudio otimizado para transcrição"""
+    log(f"Extraindo áudio de {video_path}")
+    
+    # Configuração otimizada para transcrição
     cmd = [
         "ffmpeg", "-y", "-i", video_path,
-        "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", audio_path
+        "-vn",  # Sem vídeo
+        "-acodec", "pcm_s16le",  # Codec PCM 16-bit
+        "-ar", "16000",  # Sample rate 16kHz (ideal para Whisper)
+        "-ac", "1",  # Mono
+        "-af", "highpass=f=200,lowpass=f=8000,volume=1.5",  # Filtros de áudio
+        audio_path
     ]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        log("Áudio extraído com sucesso")
+    except subprocess.CalledProcessError as e:
+        log(f"Erro na extração de áudio: {e.stderr}", "ERROR")
+        raise
 
-# Utilitário para dividir áudio em chunks
-def split_audio(audio_path, out_dir):
+def split_audio_optimized(audio_path: str, out_dir: str, duration_seconds: float) -> List[Tuple[str, float, float]]:
+    """Divide áudio de forma otimizada"""
+    log(f"Dividindo áudio em chunks otimizados (duração: {duration_seconds:.1f}s)")
+    
     audio = AudioSegment.from_wav(audio_path)
-    duration_sec = len(audio) / 1000
-    n_chunks = max(1, min(MAX_CHUNKS, math.ceil(duration_sec / IDEAL_CHUNK_SECONDS)))
-    chunk_length = max(MIN_CHUNK_SECONDS, duration_sec / n_chunks)
-    # Arredondar chunk_length para baixo para múltiplo de 30s
-    if chunk_length >= 30:
-        chunk_length = int(chunk_length // 30) * 30
+    chunk_size_seconds = get_optimal_chunk_size(duration_seconds)
+    
+    # Calcular número de chunks
+    n_chunks = max(1, math.ceil(duration_seconds / chunk_size_seconds))
+    actual_chunk_size = duration_seconds / n_chunks
+    
+    log(f"Configuração: {n_chunks} chunks de ~{actual_chunk_size:.1f}s cada")
+    
     chunk_paths = []
     start = 0
+    
     for i in range(n_chunks):
-        end = min(start + chunk_length * 1000, len(audio))
+        end = min(start + actual_chunk_size * 1000, len(audio))
         if i == n_chunks - 1:
-            end = len(audio)  # último chunk pega o resto
+            end = len(audio)  # Último chunk pega o resto
+        
         if start >= end:
             break
+            
         chunk = audio[int(start):int(end)]
-        chunk_path = os.path.join(out_dir, f"chunk_{i+1}.wav")
+        chunk_path = os.path.join(out_dir, f"chunk_{i+1:03d}.wav")
+        
+        # Otimizar chunk antes de salvar
+        chunk = chunk.set_frame_rate(16000).set_channels(1)
+        
+        # Normalizar volume
+        chunk = chunk.normalize()
+        
         chunk.export(chunk_path, format="wav")
         chunk_paths.append((chunk_path, start / 1000, end / 1000))
         start = end
-    # Se o último chunk for muito pequeno, junte ao anterior
-    if len(chunk_paths) > 1 and (chunk_paths[-1][2] - chunk_paths[-1][1]) < MIN_CHUNK_SECONDS:
-        prev_path, prev_start, prev_end = chunk_paths[-2]
-        last_path, last_start, last_end = chunk_paths[-1]
-        audio_prev = AudioSegment.from_wav(prev_path)
-        audio_last = AudioSegment.from_wav(last_path)
-        combined = audio_prev + audio_last
-        combined.export(prev_path, format="wav")
-        chunk_paths[-2] = (prev_path, prev_start, last_end)
-        chunk_paths.pop()
-        os.remove(last_path)
+    
+    log(f"Criados {len(chunk_paths)} chunks otimizados")
     return chunk_paths
 
-# Função para transcrever um chunk
-def transcribe_chunk(chunk_path, start_sec, end_sec, model):
-    log(f"Transcrevendo chunk {chunk_path} ({start_sec:.1f}s - {end_sec:.1f}s)...")
+def transcribe_chunk_optimized(chunk_info: Tuple[str, float, float], config: Dict[str, Any]) -> Dict[str, Any]:
+    """Transcreve um chunk com configuração otimizada"""
+    chunk_path, start_sec, end_sec = chunk_info
+    
     try:
+        log(f"Transcrevendo chunk {os.path.basename(chunk_path)} ({start_sec:.1f}s - {end_sec:.1f}s)")
+        
         if USE_TURBO:
-            global TURBO_MODEL
-            if TURBO_MODEL is None:
-                TURBO_MODEL = WhisperModel("medium", device="cpu", compute_type="float32", num_workers=1)
-            segments, info = TURBO_MODEL.transcribe(chunk_path, beam_size=5, word_timestamps=True)
+            from faster_whisper import WhisperModel
+            
+            # Carregar modelo uma vez por worker
+            model = WhisperModel(
+                config["model"], 
+                device="cpu", 
+                compute_type="float32",
+                num_workers=1,
+                download_root=None
+            )
+            
+            # Transcrever com configurações otimizadas
+            segments, info = model.transcribe(
+                chunk_path,
+                beam_size=config["beam_size"],
+                best_of=config["best_of"],
+                temperature=config["temperature"],
+                compression_ratio_threshold=config["compression_ratio_threshold"],
+                log_prob_threshold=config["logprob_threshold"],
+                no_speech_threshold=config["no_speech_threshold"],
+                word_timestamps=True,
+                condition_on_previous_text=False,
+                initial_prompt=None
+            )
+            
+            # Processar segmentos
             segs = []
             for seg in segments:
                 segs.append({
                     "start": float(seg.start) + start_sec,
                     "end": float(seg.end) + start_sec,
-                    "text": seg.text.strip()
+                    "text": seg.text.strip(),
+                    "words": [{"word": w.word, "start": float(w.start) + start_sec, "end": float(w.end) + start_sec} for w in seg.words] if hasattr(seg, 'words') else []
                 })
-            return {"segments": segs, "chunk": os.path.basename(chunk_path)}
+            
+            return {
+                "segments": segs, 
+                "chunk": os.path.basename(chunk_path),
+                "language": info.language,
+                "language_probability": info.language_probability
+            }
         else:
-            result = model.transcribe(chunk_path, word_timestamps=True, verbose=False, fp16=False)
+            # Whisper padrão
+            model = whisper.load_model(config["model"], device="cpu")
+            
+            result = model.transcribe(
+                chunk_path,
+                beam_size=config["beam_size"],
+                best_of=config["best_of"],
+                temperature=config["temperature"],
+                compression_ratio_threshold=config["compression_ratio_threshold"],
+                logprob_threshold=config["logprob_threshold"],
+                no_speech_threshold=config["no_speech_threshold"],
+                word_timestamps=True,
+                condition_on_previous_text=False,
+                initial_prompt=None,
+                verbose=False,
+                fp16=False
+            )
+            
             segments = []
             for seg in result.get("segments", []):
                 segments.append({
                     "start": float(seg["start"]) + start_sec,
                     "end": float(seg["end"]) + start_sec,
-                    "text": seg["text"].strip()
+                    "text": seg["text"].strip(),
+                    "words": seg.get("words", [])
                 })
-            del result
-            return {"segments": segments, "chunk": os.path.basename(chunk_path)}
+            
+            return {
+                "segments": segments, 
+                "chunk": os.path.basename(chunk_path),
+                "language": result.get("language", "pt"),
+                "language_probability": result.get("language_probability", 1.0)
+            }
+            
     except Exception as e:
-        log(f"Erro ao transcrever chunk {chunk_path}: {e}")
-        return {"segments": [], "chunk": os.path.basename(chunk_path), "error": str(e)}
+        log(f"Erro ao transcrever chunk {chunk_path}: {e}", "ERROR")
+        return {
+            "segments": [], 
+            "chunk": os.path.basename(chunk_path), 
+            "error": str(e)
+        }
 
-# Pipeline principal
+def monitor_resources() -> Dict[str, float]:
+    """Monitora uso de recursos"""
+    cpu_percent = psutil.cpu_percent(interval=1)
+    memory = psutil.virtual_memory()
+    return {
+        "cpu_percent": cpu_percent,
+        "memory_percent": memory.percent,
+        "memory_available_gb": memory.available / (1024**3)
+    }
+
 def main():
     if len(sys.argv) < 2:
         print(json.dumps({"error": "Uso: python chunked_transcribe.py <video_path>", "segments": []}))
         sys.exit(1)
+    
     video_path = sys.argv[1]
     if not os.path.exists(video_path):
         print(json.dumps({"error": f"Arquivo não encontrado: {video_path}", "segments": []}))
         sys.exit(1)
 
+    start_time = time.time()
     temp_dir = tempfile.mkdtemp()
     audio_path = os.path.join(temp_dir, "audio.wav")
+    
     try:
+        # Monitor inicial
+        resources = monitor_resources()
+        log(f"Recursos iniciais: CPU {resources['cpu_percent']:.1f}%, RAM {resources['memory_percent']:.1f}% ({resources['memory_available_gb']:.1f}GB livre)")
+        
+        # Extrair áudio
         log("Iniciando extração de áudio...")
         extract_audio(video_path, audio_path)
-        log("Áudio extraído. Apagando vídeo original para liberar espaço...")
-        try:
-            os.remove(video_path)
-        except Exception as e:
-            log(f"Não foi possível apagar vídeo: {e}")
+        
+        # Obter duração do áudio
+        audio = AudioSegment.from_wav(audio_path)
+        duration_seconds = len(audio) / 1000
+        log(f"Duração do áudio: {duration_seconds:.1f} segundos")
+        
+        # Determinar configuração otimal
+        config = get_optimal_config(duration_seconds)
+        log(f"Configuração selecionada: {config['model']} (beam_size={config['beam_size']}, best_of={config['best_of']})")
+        
+        # Dividir áudio
         log("Dividindo áudio em chunks...")
-        chunk_infos = split_audio(audio_path, temp_dir)
-        log(f"{len(chunk_infos)} chunks criados.")
+        chunk_infos = split_audio_optimized(audio_path, temp_dir, duration_seconds)
+        
+        # Limpar áudio original para liberar espaço
         try:
             os.remove(audio_path)
-        except Exception as e:
-            log(f"Não foi possível apagar áudio: {e}")
-        log("Carregando modelo Whisper...")
-        if USE_TURBO:
-            model = None  # handled in transcribe_chunk
-            log("Modo TURBO: usando faster-whisper (medium, int8, CPU)")
-        else:
-            model = whisper.load_model("medium", device="cpu")
-            torch.set_default_dtype(torch.float32)
-            log("Modelo Whisper padrão (medium) carregado.")
-        log("Modelo carregado. Iniciando transcrição dos chunks...")
-        # Transcrever chunks sequencialmente (um por vez, na ordem)
-        results = []
-        for chunk_path, start, end in chunk_infos:
-            res = transcribe_chunk(chunk_path, start, end, model)
-            results.append(res)
-            try:
-                os.remove(chunk_path)
-            except Exception:
-                pass
+            del audio
+        except:
+            pass
+        
+        # Transcrever chunks em paralelo
+        log(f"Iniciando transcrição paralela com {MAX_WORKERS} workers...")
+        
         all_segments = []
-        for chunk_path, start, end in chunk_infos:
-            for r in results:
-                if r["chunk"] == os.path.basename(chunk_path):
-                    all_segments.extend(r.get("segments", []))
+        languages = []
+        language_probs = []
+        
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            # Submeter todos os chunks
+            future_to_chunk = {
+                executor.submit(transcribe_chunk_optimized, chunk_info, config): chunk_info 
+                for chunk_info in chunk_infos
+            }
+            
+            # Processar resultados conforme ficam prontos
+            for future in as_completed(future_to_chunk):
+                chunk_info = future_to_chunk[future]
+                try:
+                    result = future.result()
+                    
+                    if "error" in result:
+                        log(f"Erro no chunk {result['chunk']}: {result['error']}", "ERROR")
+                        continue
+                    
+                    all_segments.extend(result.get("segments", []))
+                    languages.append(result.get("language", "pt"))
+                    language_probs.append(result.get("language_probability", 1.0))
+                    
+                    # Monitorar recursos
+                    if len(all_segments) % 3 == 0:  # A cada 3 chunks
+                        resources = monitor_resources()
+                        log(f"Progresso: {len(all_segments)} segmentos, CPU {resources['cpu_percent']:.1f}%, RAM {resources['memory_percent']:.1f}%")
+                    
+                    # Limpar chunk processado
+                    try:
+                        os.remove(chunk_info[0])
+                    except:
+                        pass
+                        
+                except Exception as e:
+                    log(f"Erro ao processar chunk {chunk_info[0]}: {e}", "ERROR")
+        
         if not all_segments:
             raise Exception("Nenhum segmento de transcrição gerado!")
-        print(json.dumps({"segments": all_segments}, ensure_ascii=False))
+        
+        # Determinar idioma dominante
+        if languages:
+            dominant_language = max(set(languages), key=languages.count)
+            avg_language_prob = sum(language_probs) / len(language_probs)
+        else:
+            dominant_language = "pt"
+            avg_language_prob = 1.0
+        
+        # Ordenar segmentos por tempo
+        all_segments.sort(key=lambda x: x["start"])
+        
+        # Estatísticas finais
+        total_duration = time.time() - start_time
+        total_text = " ".join([seg["text"] for seg in all_segments])
+        
+        log(f"Transcrição concluída em {total_duration:.1f}s")
+        log(f"Segmentos: {len(all_segments)}, Caracteres: {len(total_text)}")
+        log(f"Idioma: {dominant_language} (confiança: {avg_language_prob:.2f})")
+        
+        # Resultado final
+        result = {
+            "segments": all_segments,
+            "metadata": {
+                "duration_seconds": duration_seconds,
+                "processing_time_seconds": total_duration,
+                "segments_count": len(all_segments),
+                "total_characters": len(total_text),
+                "language": dominant_language,
+                "language_confidence": avg_language_prob,
+                "model_used": config["model"],
+                "workers_used": MAX_WORKERS,
+                "chunks_processed": len(chunk_infos)
+            }
+        }
+        
+        print(json.dumps(result, ensure_ascii=False))
+        
     except Exception as e:
-        log(f"Erro fatal: {e}")
+        log(f"Erro fatal: {e}", "ERROR")
         print(json.dumps({"error": str(e), "segments": []}))
     finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        # Limpeza final
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except:
+            pass
 
 if __name__ == "__main__":
     main() 

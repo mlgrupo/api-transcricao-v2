@@ -82,7 +82,7 @@ export class TranscriptionProcessor {
       videoPath,
       outputDir,
       config: this.config,
-      approach: "chunked_transcribe.py (sem diarização)"
+      approach: "chunked_transcribe.py (otimizado para 7.5 vCPUs, 28GB RAM)"
     });
 
     const scriptPath = path.join(process.cwd(), "python", "chunked_transcribe.py");
@@ -108,7 +108,8 @@ export class TranscriptionProcessor {
         videoId,
         durationSeconds: duration,
         segments: result.segments?.length || 0,
-        textLength: transcription.length
+        textLength: transcription.length,
+        metadata: result.metadata
       });
       return transcription;
     } catch (error: any) {
@@ -125,42 +126,98 @@ export class TranscriptionProcessor {
     scriptPath: string,
     videoPath: string,
     outputDir?: string
-  ): Promise<{ segments: Array<{ start: number; end: number; text: string }> }> {
-    this.logger.info("🚀 Executando chunked_transcribe.py... (com logs em tempo real)", { scriptPath, videoPath });
-    let commandArgs = [scriptPath, videoPath];
-    if (outputDir) {
-      commandArgs.push(outputDir);
-    }
-    const env = { ...process.env };
-    env.PYTHONIOENCODING = "utf-8";
-    env.LC_ALL = "pt_BR.UTF-8";
-    env.LANG = "pt_BR.UTF-8";
-    delete env.HF_TOKEN;
+  ): Promise<{ 
+    segments: Array<{ start: number; end: number; text: string; words?: any[] }>;
+    metadata?: {
+      duration_seconds: number;
+      processing_time_seconds: number;
+      segments_count: number;
+      total_characters: number;
+      language: string;
+      language_confidence: number;
+      model_used: string;
+      workers_used: number;
+      chunks_processed: number;
+    };
+  }> {
+    this.logger.info("Executando script Python", { scriptPath, videoPath, outputDir });
+    
+    const args = [scriptPath, videoPath];
+    if (outputDir) args.push(outputDir);
+    
     return await new Promise((resolve, reject) => {
-      const python = spawn("python", commandArgs, { env });
-      let stdoutBuffer = "";
-      let stderrBuffer = "";
+      const python = spawn('python', args, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, PYTHONUNBUFFERED: '1' }
+      });
+
+      let stdoutBuffer = '';
+      let stderrBuffer = '';
+      let lastLogTime = Date.now();
+
+      // Timeout de 2 horas para evitar travamento
+      const timeout = setTimeout(() => {
+        this.logger.error("[chunked_transcribe.py][timeout]", { 
+          message: "Processo Python excedeu o tempo limite de 2 horas",
+          videoPath 
+        });
+        python.kill('SIGKILL');
+        reject(new Error("Timeout: Processo Python excedeu 2 horas"));
+      }, 2 * 60 * 60 * 1000); // 2 horas
+
       python.stdout.on("data", (data) => {
-        const text = data.toString();
-        stdoutBuffer += text;
+        const chunk = data.toString();
+        stdoutBuffer += chunk;
+        
+        // Log a cada 30 segundos para acompanhar o progresso
+        const now = Date.now();
+        if (now - lastLogTime > 30000) {
+          this.logger.info("[chunked_transcribe.py][stdout-progress]", { 
+            bufferLength: stdoutBuffer.length,
+            lastChunk: chunk.slice(-200) // últimos 200 caracteres
+          });
+          lastLogTime = now;
+        }
       });
+
       python.stderr.on("data", (data) => {
-        const text = data.toString();
-        stderrBuffer += text;
-        process.stderr.write(`[PYTHON STDERR] ${text}`); // Mostra logs do Python em tempo real
+        const chunk = data.toString();
+        stderrBuffer += chunk;
+        this.logger.info("[chunked_transcribe.py][stderr]", { stderr: chunk });
       });
+
       python.on("close", (code) => {
+        clearTimeout(timeout); // Limpar timeout
         this.logger.info("[chunked_transcribe.py][exit]", { code });
         if (stderrBuffer.trim()) {
           this.logger.info("[chunked_transcribe.py][stderr-final]", { stderr: stderrBuffer.slice(0, 500) });
         }
+        
+        if (code !== 0) {
+          this.logger.error("[chunked_transcribe.py][error]", { 
+            code, 
+            stderr: stderrBuffer,
+            stdout: stdoutBuffer.slice(-500) // últimos 500 caracteres
+          });
+          reject(new Error(`Script Python falhou com código ${code}`));
+          return;
+        }
+        
         try {
           const cleanedStdout = stdoutBuffer.trim();
           const jsonMatch = cleanedStdout.match(/\{[\s\S]*\}$/);
           if (jsonMatch) {
-            resolve(JSON.parse(jsonMatch[0]));
+            const result = JSON.parse(jsonMatch[0]);
+            this.logger.info("[chunked_transcribe.py][success]", { 
+              segmentsCount: result.segments?.length || 0,
+              hasError: !!result.error
+            });
+            resolve(result);
           } else {
-            resolve(JSON.parse(cleanedStdout));
+            this.logger.error("[chunked_transcribe.py][parse-error]", { 
+              stdout: cleanedStdout.slice(-500)
+            });
+            reject(new Error("Falha ao processar saída do chunked_transcribe.py"));
           }
         } catch (e: any) {
           this.logger.error("❌ Erro ao processar JSON do chunked_transcribe.py", {
@@ -170,7 +227,9 @@ export class TranscriptionProcessor {
           reject(new Error("Falha ao processar saída do chunked_transcribe.py"));
         }
       });
+      
       python.on("error", (err) => {
+        clearTimeout(timeout); // Limpar timeout
         this.logger.error("❌ Erro ao spawnar processo Python", { error: err.message });
         reject(err);
       });
@@ -178,20 +237,56 @@ export class TranscriptionProcessor {
   }
 
   private processSegmentsResult(
-    result: { segments: Array<{ start: number; end: number; text: string }> },
-    duration: number,
+    result: { 
+      segments: Array<{ start: number; end: number; text: string; words?: any[] }>;
+      metadata?: any;
+    }, 
+    duration: number, 
     videoId: string
   ): string {
-    if (!result || !Array.isArray(result.segments)) {
-      throw new Error("Resultado inválido do chunked_transcribe.py: segments ausentes");
+    if (!result.segments || result.segments.length === 0) {
+      this.logger.warn("Nenhum segmento encontrado no resultado", { videoId });
+      return "Nenhuma transcrição gerada.";
     }
-    // Junta todos os textos com timestamps
-    const textoFinal = result.segments.map(seg => {
-      const ini = new Date(seg.start * 1000).toISOString().substr(11, 8);
-      const fim = new Date(seg.end * 1000).toISOString().substr(11, 8);
-      return `[${ini} - ${fim}] ${seg.text}`;
-    }).join('\n');
-    return textoFinal;
+
+    // Ordenar segmentos por tempo de início
+    const sortedSegments = result.segments.sort((a, b) => a.start - b.start);
+    
+    // Construir transcrição com timestamps precisos
+    const transcriptionLines: string[] = [];
+    
+    for (const segment of sortedSegments) {
+      const startTime = this.formatTimestamp(segment.start);
+      const endTime = this.formatTimestamp(segment.end);
+      const text = segment.text.trim();
+      
+      if (text) {
+        transcriptionLines.push(`[${startTime} → ${endTime}] ${text}`);
+      }
+    }
+    
+    const finalTranscription = transcriptionLines.join('\n\n');
+    
+    this.logger.info("Transcrição processada", {
+      videoId,
+      segmentsCount: sortedSegments.length,
+      totalLength: finalTranscription.length,
+      processingTime: duration
+    });
+    
+    return finalTranscription;
+  }
+
+  private formatTimestamp(seconds: number): string {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    
+    if (hours > 0) {
+      return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    } else {
+      return `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
   }
 
   // MÉTODOS DE CONFIGURAÇÃO E UTILITÁRIOS

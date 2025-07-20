@@ -143,6 +143,7 @@ export class DriveWatcher {
               // Buscar a data do último vídeo salvo para este usuário/pasta
               const lastVideo = await this.videoService.getLastVideoByUserAndFolder(userId, folderId);
               let lastCreatedTime: string | undefined = undefined;
+              
               if (lastVideo?.createdTime) {
                 if (typeof lastVideo.createdTime === 'string') {
                   const parsedDate = new Date(lastVideo.createdTime);
@@ -155,6 +156,7 @@ export class DriveWatcher {
                   lastCreatedTime = lastVideo.createdTime.toISOString();
                 }
               }
+              
               if (!lastCreatedTime) {
                 // Se não houver vídeo anterior, busca só os últimos 5 minutos para evitar flood
                 const now = new Date();
@@ -180,8 +182,11 @@ export class DriveWatcher {
                 this.logger.info(`Nenhum vídeo novo encontrado para ${email} na pasta '${folderInput}'`);
                 continue;
               }
+              
               this.logger.info(`🆕 ${newVideos.length} novos vídeos encontrados para ${email} na pasta '${folderInput}'`);
+              
               // Salvar vídeos e enviar para o webhook
+              let savedCount = 0;
               for (const file of newVideos) {
                 const savedVideos = await this.videoService.insertVideos([
                   {
@@ -192,9 +197,11 @@ export class DriveWatcher {
                     parents: file.parents || undefined,
                   }
                 ], email, userId);
+                
                 // Enfileirar para transcrição cada vídeo salvo
                 for (const saved of savedVideos) {
                   if (saved && saved.videoId) {
+                    savedCount++;
                     // Atualiza status para 'processing' imediatamente
                     await this.videoService.markVideoAsProcessing(saved.videoId);
                     const taskId = `${email}-${saved.videoId}`;
@@ -206,6 +213,7 @@ export class DriveWatcher {
                     });
                   }
                 }
+                
                 // Payload para o webhook
                 const payload = {
                   videoId: file.id,
@@ -223,6 +231,10 @@ export class DriveWatcher {
                   status: 'new_video_detected', // Necessário para o tipo WebhookData
                 };
                 await this.webhookService.sendToAllWebhooks('new_video_detected', payload, this.configRepo);
+              }
+              
+              if (savedCount > 0) {
+                this.logger.info(`✅ ${savedCount} vídeos salvos e enfileirados para transcrição`);
               }
             } catch (error: any) {
               if (error?.response?.status === 404 || (error.message && error.message.includes('File not found'))) {

@@ -28,7 +28,8 @@ export class TranscriptionQueue {
   ) {
     this.queue = new Map();
     this.processing = new Set();
-    this.maxConcurrentJobs = parseInt("2", 10);
+    // Otimizado para 7.5 vCPUs: 2 jobs simultâneos (cada um usa ~3.75 vCPUs)
+    this.maxConcurrentJobs = parseInt(process.env.MAX_CONCURRENT_JOBS || "2", 10);
 
     this.logger.info(`Fila de transcrição inicializada com limite de ${this.maxConcurrentJobs} jobs simultâneos`);
   }
@@ -39,11 +40,11 @@ export class TranscriptionQueue {
       return;
     }
     
-    // Configurar limites de recursos padrão se não especificados
+    // Configurar limites de recursos otimizados para 7.5 vCPUs e 28GB RAM
     if (!job.resourceLimit) {
       job.resourceLimit = {
-        maxCpuPercent: 49,  // Máximo 50% CPU por vídeo (4 vCPUs de 8)
-        maxMemoryGB: 13     // Máximo 12GB RAM por vídeo (de 32GB total)
+        maxCpuPercent: 45,  // Máximo 45% CPU por vídeo (3.375 vCPUs de 7.5)
+        maxMemoryGB: 12     // Máximo 12GB RAM por vídeo (de 28GB total)
       };
     }
     
@@ -169,11 +170,12 @@ export class TranscriptionQueue {
    * Verifica se há recursos suficientes para processar um job
    */
   private canProcessJob(job: QueueJob, currentCpuUsage: number, currentMemoryUsage: number): boolean {
-    const requiredCpu = job.resourceLimit?.maxCpuPercent || 50;
+    const requiredCpu = job.resourceLimit?.maxCpuPercent || 45;
     const requiredMemory = job.resourceLimit?.maxMemoryGB || 12;
     
-    const availableCpu = 100 - currentCpuUsage;
-    const availableMemory = 32 - currentMemoryUsage;
+    // Limites otimizados para 7.5 vCPUs e 28GB RAM
+    const availableCpu = 75 - currentCpuUsage;  // 75% de 7.5 vCPUs
+    const availableMemory = 28 - currentMemoryUsage;
     
     return availableCpu >= requiredCpu && availableMemory >= requiredMemory;
   }
@@ -243,7 +245,7 @@ export class TranscriptionQueue {
 
     // Registrar uso de recursos estimado
     this.resourceUsage.set(taskId, {
-      cpuPercent: job.resourceLimit?.maxCpuPercent || 50,
+      cpuPercent: job.resourceLimit?.maxCpuPercent || 45,
       memoryGB: job.resourceLimit?.maxMemoryGB || 12
     });
 

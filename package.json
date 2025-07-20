@@ -8,7 +8,9 @@
     "typeorm": "ts-node ./node_modules/typeorm/cli.js",
     "migrate": "npm run build && npx typeorm migration:run -d dist/data/data-source.js",
     "start:dev": "ts-node-dev --respawn --transpile-only src/server.ts",
-    "start:dev:tsx": "tsx watch src/server.ts"
+    "start:dev:tsx": "tsx watch src/server.ts",
+    "clean-stuck": "ts-node src/scripts/clean-stuck-videos.ts",
+    "test-performance": "python python/test_performance.py"
   },
   "keywords": [],
   "author": "",
