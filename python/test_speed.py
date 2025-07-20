@@ -29,16 +29,14 @@ def test_model_speed(model_name: str, test_audio_path: str = "test_audio.wav"):
         start_time = time.time()
         result = model.transcribe(
             test_audio_path,
-            beam_size=1,
+            beam_size=2,
             best_of=1,
             temperature=0.0,
-            language="pt",
-            task="transcribe",
-            verbose=False,
-            fp16=False,
             patience=1,
             length_penalty=1.0,
-            repetition_penalty=1.0
+            word_timestamps=True,
+            condition_on_previous_text=False,
+            language="pt"
         )
         transcribe_time = time.time() - start_time
         print(f"⚡ Tempo de transcrição: {transcribe_time:.2f}s")

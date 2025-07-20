@@ -102,32 +102,14 @@ def transcribe_chunk_simple(chunk_path: str, start_sec: float, end_sec: float, m
         # Configurações para máxima velocidade
         result = model.transcribe(
             chunk_path,
-            beam_size=BEAM_SIZE,
-            best_of=BEST_OF,
+            beam_size=2,
+            best_of=1,
             temperature=0.0,
-            compression_ratio_threshold=2.4,
-            logprob_threshold=-1.0,
-            no_speech_threshold=0.6,
-            word_timestamps=True,  # Habilitado para ter timestamps
+            patience=1,
+            length_penalty=1.0,
+            word_timestamps=True,
             condition_on_previous_text=False,
-            initial_prompt=None,
-            verbose=False,
-            fp16=False,
-            # Otimizações adicionais para velocidade
-            language="pt",  # Forçar português para velocidade
-            task="transcribe",  # Especificar tarefa
-            suppress_tokens=[-1],  # Suprimir tokens especiais
-            without_timestamps=False,  # Manter timestamps
-            max_initial_timestamp=1.0,  # Limitar timestamp inicial
-            prepend_punctuations="\"'([{-",  # Configurar pontuação (sem caracteres especiais)
-            append_punctuations="\"'.!?):]}",
-            # Configurações ULTRA rápidas
-            patience=1,  # Mínimo patience para velocidade
-            length_penalty=1.0,  # Penalidade mínima
-            repetition_penalty=1.0,  # Penalidade mínima
-            no_speech_threshold=0.8,  # Mais tolerante para velocidade
-            logprob_threshold=-1.0,  # Mínimo threshold
-            compression_ratio_threshold=2.4  # Máximo threshold
+            language=detected_language
         )
         
         segments = []
