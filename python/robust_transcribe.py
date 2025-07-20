@@ -17,6 +17,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import psutil
 import gc
 
+# Importar pós-processador
+from post_processor import TranscriptionPostProcessor
+
 # Configurações robustas e otimizadas
 CHUNK_SIZE_SECONDS = 300  # 5 minutos por chunk
 MAX_WORKERS = 2  # Processar 2 chunks por vez (robusto)
@@ -328,27 +331,57 @@ def main():
         # Ordenar segmentos por tempo
         all_segments.sort(key=lambda x: x["start"])
         
-        # Estatísticas finais
-        total_duration = time.time() - start_time
-        total_text = " ".join([seg["text"] for seg in all_segments])
+        # PÓS-PROCESSAMENTO: Melhorar qualidade do texto
+        log("Iniciando pós-processamento para melhorar qualidade...")
+        post_processor = TranscriptionPostProcessor()
         
-        log(f"Transcrição concluída em {total_duration:.1f}s")
-        log(f"Segmentos: {len(all_segments)}, Caracteres: {len(total_text)}")
-        log(f"Idioma: {dominant_language}")
-        
-        # Resultado final
-        result = {
+        # Criar dados para pós-processamento
+        transcription_data = {
             "segments": all_segments,
             "metadata": {
                 "duration_seconds": duration_seconds,
+                "language": dominant_language,
+                "chunks_processed": len(chunk_infos),
+                "workers_used": MAX_WORKERS,
+                "model_used": config["model"]
+            }
+        }
+        
+        # Aplicar pós-processamento
+        improved_data = post_processor.process_transcription(transcription_data)
+        improved_segments = improved_data["segments"]
+        
+        log(f"Pós-processamento concluído - {len(improved_segments)} segmentos melhorados")
+        
+        # Estatísticas finais
+        total_duration = time.time() - start_time
+        total_text = " ".join([seg["text"] for seg in improved_segments])
+        
+        log(f"Transcrição concluída em {total_duration:.1f}s")
+        log(f"Segmentos: {len(improved_segments)}, Caracteres: {len(total_text)}")
+        log(f"Idioma: {dominant_language}")
+        
+        # Resultado final com pós-processamento
+        result = {
+            "segments": improved_segments,
+            "metadata": {
+                "duration_seconds": duration_seconds,
                 "processing_time_seconds": total_duration,
-                "segments_count": len(all_segments),
+                "segments_count": len(improved_segments),
                 "total_characters": len(total_text),
                 "language": dominant_language,
                 "chunks_processed": len(chunk_infos),
                 "workers_used": MAX_WORKERS,
                 "model_used": config["model"],
-                "speed_factor": duration_seconds / total_duration
+                "speed_factor": duration_seconds / total_duration,
+                "post_processed": True,
+                "improvements_applied": [
+                    "Correção de abreviações",
+                    "Melhoria de pontuação", 
+                    "Capitalização de nomes próprios",
+                    "Correção de erros comuns",
+                    "Estruturação de frases"
+                ]
             }
         }
         

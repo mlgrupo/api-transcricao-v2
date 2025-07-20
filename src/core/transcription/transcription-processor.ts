@@ -110,7 +110,9 @@ export class TranscriptionProcessor {
         hasWordTimestamps: result.segments?.some(seg => seg.words && seg.words.length > 0) || false,
         metadata: result.metadata,
         speedFactor: result.metadata?.speed_factor ? `${result.metadata.speed_factor.toFixed(1)}x` : "N/A",
-        workersUsed: result.metadata?.workers_used || 1
+        workersUsed: result.metadata?.workers_used || 1,
+        postProcessed: result.metadata?.post_processed || false,
+        improvementsApplied: result.metadata?.improvements_applied || []
       });
       
       return transcription;
@@ -448,6 +450,8 @@ export class TranscriptionProcessor {
       workers_used: number;
       model_used: string;
       speed_factor?: number;
+      post_processed?: boolean;
+      improvements_applied?: string[];
     };
   }> {
     return new Promise((resolve, reject) => {
