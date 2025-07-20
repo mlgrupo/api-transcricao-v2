@@ -9,10 +9,11 @@ import whisper
 import subprocess
 from pydub import AudioSegment
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import numpy as np
 
 # Configurações
 MAX_CHUNKS = 4
-MAX_CONCURRENT_CHUNKS = 2
+MAX_CONCURRENT_CHUNKS = 1  # Limitar para máxima estabilidade em CPU
 WHISPER_MODEL = "large"
 
 def log(msg):
@@ -53,7 +54,7 @@ def split_audio(audio_path, out_dir, max_chunks=MAX_CHUNKS):
 def transcribe_chunk(chunk_path, start_sec, end_sec, model):
     log(f"Transcrevendo chunk {chunk_path} ({start_sec:.1f}s - {end_sec:.1f}s)...")
     try:
-        result = model.transcribe(chunk_path, word_timestamps=True, verbose=False)
+        result = model.transcribe(chunk_path, word_timestamps=True, verbose=False, fp16=False)
         segments = []
         for seg in result.get("segments", []):
             segments.append({
@@ -95,7 +96,8 @@ def main():
         except Exception as e:
             log(f"Não foi possível apagar áudio: {e}")
         log("Carregando modelo Whisper...")
-        model = whisper.load_model(WHISPER_MODEL, device="cuda" if torch.cuda.is_available() else "cpu")
+        model = whisper.load_model(WHISPER_MODEL, device="cpu")
+        torch.set_default_dtype(torch.float32)  # Forçar FP32
         log("Modelo carregado. Iniciando transcrição dos chunks...")
         results = []
         with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_CHUNKS) as executor:

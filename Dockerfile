@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Instala ffmpeg
 RUN apt-get update && \
-    apt-get install -y ffmpeg && \
+    apt-get install -y ffmpeg libopenblas-dev libomp-dev && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Copia pacotes e instala dependências Node.js
@@ -14,6 +14,12 @@ RUN npm install
 ENV NODE_ENV=production
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
+
+ENV OMP_NUM_THREADS=1
+ENV OPENBLAS_NUM_THREADS=1
+ENV MKL_NUM_THREADS=1
+ENV NUMEXPR_NUM_THREADS=1
+ENV PYTORCH_ENABLE_MPS_FALLBACK=1
 
 # Copia o restante do código
 COPY . .
