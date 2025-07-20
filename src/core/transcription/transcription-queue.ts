@@ -28,8 +28,8 @@ export class TranscriptionQueue {
   ) {
     this.queue = new Map();
     this.processing = new Set();
-    // Otimizado para 7.5 vCPUs: 3 jobs simultâneos (cada um usa ~2.5 vCPUs)
-    this.maxConcurrentJobs = parseInt(process.env.MAX_CONCURRENT_JOBS || "3", 10);
+    // Processamento sequencial: apenas 1 job por vez
+    this.maxConcurrentJobs = parseInt(process.env.MAX_CONCURRENT_JOBS || "1", 10);
 
     this.logger.info(`Fila de transcrição inicializada com limite de ${this.maxConcurrentJobs} jobs simultâneos`);
   }
@@ -40,11 +40,11 @@ export class TranscriptionQueue {
       return;
     }
     
-    // Configurar limites de recursos otimizados para 7.5 vCPUs e 28GB RAM
+    // Configurar limites de recursos para processamento sequencial
     if (!job.resourceLimit) {
       job.resourceLimit = {
-        maxCpuPercent: 30,  // Máximo 30% CPU por vídeo (2.25 vCPUs de 7.5)
-        maxMemoryGB: 8      // Máximo 8GB RAM por vídeo (de 28GB total)
+        maxCpuPercent: 95,  // Máximo 80% CPU por vídeo (6 vCPUs de 7.5)
+        maxMemoryGB: 20     // Máximo 20GB RAM por vídeo (de 28GB total)
       };
     }
     
@@ -170,11 +170,11 @@ export class TranscriptionQueue {
    * Verifica se há recursos suficientes para processar um job
    */
   private canProcessJob(job: QueueJob, currentCpuUsage: number, currentMemoryUsage: number): boolean {
-    const requiredCpu = job.resourceLimit?.maxCpuPercent || 30;
-    const requiredMemory = job.resourceLimit?.maxMemoryGB || 8;
+    const requiredCpu = job.resourceLimit?.maxCpuPercent || 80;
+    const requiredMemory = job.resourceLimit?.maxMemoryGB || 20;
     
-    // Limites otimizados para 7.5 vCPUs e 28GB RAM
-    const availableCpu = 90 - currentCpuUsage;  // 90% de 7.5 vCPUs
+    // Limites para processamento sequencial
+    const availableCpu = 100 - currentCpuUsage;  // 100% disponível
     const availableMemory = 28 - currentMemoryUsage;
     
     return availableCpu >= requiredCpu && availableMemory >= requiredMemory;
@@ -245,8 +245,8 @@ export class TranscriptionQueue {
 
     // Registrar uso de recursos estimado
     this.resourceUsage.set(taskId, {
-      cpuPercent: job.resourceLimit?.maxCpuPercent || 30,
-      memoryGB: job.resourceLimit?.maxMemoryGB || 8
+      cpuPercent: job.resourceLimit?.maxCpuPercent || 80,
+      memoryGB: job.resourceLimit?.maxMemoryGB || 20
     });
 
     this.logger.info('Iniciando processamento do job', { 

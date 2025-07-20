@@ -49,8 +49,8 @@ RUN python -c "import whisper; whisper.load_model('medium')"
 RUN mkdir -p /app/temp && chmod 777 /app/temp
 
 # Configurações de recursos
-ENV MAX_CONCURRENT_JOBS=3
-ENV MAX_CPU_PERCENT=90
+ENV MAX_CONCURRENT_JOBS=1
+ENV MAX_CPU_PERCENT=100
 ENV MAX_MEMORY_GB=28
 
 CMD ["sh", "-c", "npm start"]

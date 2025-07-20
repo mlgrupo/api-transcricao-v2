@@ -78,20 +78,20 @@ export class TranscriptionProcessor {
     videoId: string,
     outputDir?: string
   ): Promise<string> {
-    this.logger.info(`🎯 Iniciando transcrição otimizada para videoId: ${videoId}`, {
+    this.logger.info(`🎯 Iniciando transcrição SIMPLES para videoId: ${videoId}`, {
       videoPath,
       outputDir,
       config: this.config,
-      approach: "chunked_transcribe.py (otimizado para 7.5 vCPUs, 28GB RAM)"
+      approach: "simple_transcribe.py (sequencial, sem erros)"
     });
 
-    const scriptPath = path.join(process.cwd(), "python", "chunked_transcribe.py");
+    const scriptPath = path.join(process.cwd(), "python", "simple_transcribe.py");
 
     try {
       // Verificar se o script existe
       const scriptExists = await fs.access(scriptPath).then(() => true).catch(() => false);
       if (!scriptExists) {
-        throw new Error(`Script chunked_transcribe.py não encontrado em ${scriptPath}`);
+        throw new Error(`Script simple_transcribe.py não encontrado em ${scriptPath}`);
       }
       // Verificar se o vídeo existe
       const videoExists = await fs.access(videoPath).then(() => true).catch(() => false);
@@ -104,7 +104,7 @@ export class TranscriptionProcessor {
       
       // Executar o script Python
       const startTime = Date.now();
-      const result = await this.executeChunkedTranscription(scriptPath, videoPath, outputDir, videoId);
+      const result = await this.executeSimpleTranscription(scriptPath, videoPath, outputDir, videoId);
       const duration = (Date.now() - startTime) / 1000;
       
       // Atualizar progresso final
@@ -116,7 +116,7 @@ export class TranscriptionProcessor {
       // Atualizar progresso final
       await this.updateVideoProgress(videoId, 100, "Transcrição concluída");
       
-      this.logger.info("✅ Transcrição concluída com sucesso", {
+      this.logger.info("✅ Transcrição SIMPLES concluída com sucesso", {
         videoId,
         durationSeconds: duration,
         segments: result.segments?.length || 0,
@@ -135,6 +135,135 @@ export class TranscriptionProcessor {
       });
       throw error;
     }
+  }
+
+  private async executeSimpleTranscription(
+    scriptPath: string,
+    videoPath: string,
+    outputDir?: string,
+    videoId?: string
+  ): Promise<{ 
+    segments: Array<{ start: number; end: number; text: string; words?: any[] }>;
+    metadata?: {
+      duration_seconds: number;
+      processing_time_seconds: number;
+      segments_count: number;
+      total_characters: number;
+      language: string;
+      language_confidence: number;
+      model_used: string;
+      workers_used: number;
+      chunks_processed: number;
+    };
+  }> {
+    this.logger.info("Executando script Python simples", { scriptPath, videoPath, outputDir });
+    
+    const args = [scriptPath, videoPath];
+    if (outputDir) args.push(outputDir);
+    
+    return await new Promise((resolve, reject) => {
+      const python = spawn('python', args, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, PYTHONUNBUFFERED: '1' }
+      });
+
+      let stdoutBuffer = '';
+      let stderrBuffer = '';
+      let lastLogTime = Date.now();
+
+      // Timeout de 4 horas para vídeos longos
+      const timeout = setTimeout(() => {
+        this.logger.error("[simple_transcribe.py][timeout]", { 
+          message: "Processo Python excedeu o tempo limite de 4 horas",
+          videoPath 
+        });
+        python.kill('SIGKILL');
+        reject(new Error("Timeout: Processo Python excedeu 4 horas"));
+      }, 4 * 60 * 60 * 1000); // 4 horas
+
+      python.stdout.on("data", (data) => {
+        const chunk = data.toString();
+        stdoutBuffer += chunk;
+        
+        // Log a cada 60 segundos para acompanhar o progresso
+        const now = Date.now();
+        if (now - lastLogTime > 60000) {
+          this.logger.info("[simple_transcribe.py][stdout-progress]", { 
+            bufferLength: stdoutBuffer.length,
+            lastChunk: chunk.slice(-200)
+          });
+          lastLogTime = now;
+        }
+      });
+
+      python.stderr.on("data", (data) => {
+        const chunk = data.toString();
+        stderrBuffer += chunk;
+        
+        // Extrair informações de progresso dos logs do Python
+        const progressMatch = chunk.match(/Transcrevendo chunk (\d+)\/(\d+) \(([\d.]+)%\)/);
+        const chunkMatch = chunk.match(/Chunk (\d+) concluído/);
+        
+        if (progressMatch) {
+          const current = parseInt(progressMatch[1]);
+          const total = parseInt(progressMatch[2]);
+          const progress = parseFloat(progressMatch[3]);
+          this.logger.info(`📊 Progresso: ${current}/${total} (${progress.toFixed(1)}%)`);
+        }
+        
+        if (chunkMatch) {
+          const chunkNum = chunkMatch[1];
+          this.logger.info(`✅ Chunk ${chunkNum} concluído`);
+        }
+        
+        this.logger.info("[simple_transcribe.py][stderr]", { stderr: chunk });
+      });
+
+      python.on("close", (code) => {
+        clearTimeout(timeout);
+        this.logger.info("[simple_transcribe.py][exit]", { code });
+        
+        if (code !== 0) {
+          this.logger.error("[simple_transcribe.py][error]", { 
+            code, 
+            stderr: stderrBuffer,
+            stdout: stdoutBuffer.slice(-500)
+          });
+          reject(new Error(`Script Python falhou com código ${code}`));
+          return;
+        }
+        
+        try {
+          const cleanedStdout = stdoutBuffer.trim();
+          const jsonMatch = cleanedStdout.match(/\{[\s\S]*\}$/);
+          if (jsonMatch) {
+            const result = JSON.parse(jsonMatch[0]);
+            this.logger.info("[simple_transcribe.py][success]", { 
+              segmentsCount: result.segments?.length || 0,
+              hasError: !!result.error
+            });
+            resolve(result);
+          } else {
+            this.logger.error("[simple_transcribe.py][parse-error]", { 
+              stdout: cleanedStdout.slice(-500)
+            });
+            reject(new Error("Falha ao processar saída do simple_transcribe.py"));
+          }
+        } catch (e: any) {
+          this.logger.error("❌ Erro ao processar JSON do simple_transcribe.py", {
+            error: e.message,
+            rawOutputPreview: stdoutBuffer.slice(0, 500)
+          });
+          reject(new Error("Falha ao processar saída do simple_transcribe.py"));
+        }
+      });
+      
+      python.on("error", (err) => {
+        clearTimeout(timeout);
+        this.logger.error("❌ Erro ao spawnar processo Python", { error: err.message });
+        reject(err);
+      });
+    });
   }
 
   private async executeChunkedTranscription(
