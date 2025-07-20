@@ -38,6 +38,10 @@ ENV MAX_CONCURRENT_JOBS=1
 ENV MAX_CPU_PERCENT=100
 ENV MAX_MEMORY_GB=28
 
+# Configurações Whisper - modelo ULTRA rápido
+ENV WHISPER_MODEL=small
+ENV WHISPER_DEVICE=cpu
+
 # Copia o restante do código
 COPY . .
 

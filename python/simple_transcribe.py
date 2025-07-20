@@ -17,7 +17,7 @@ import torch
 
 # Configurações para máxima velocidade
 CHUNK_SIZE_SECONDS = 300  # 5 minutos por chunk (como solicitado)
-WHISPER_MODEL = "medium"  # Modelo rápido
+WHISPER_MODEL = "small"  # Modelo MUITO mais rápido que medium
 BEAM_SIZE = 1  # Mínimo para velocidade
 BEST_OF = 1   # Mínimo para velocidade
 
@@ -26,7 +26,7 @@ def log(msg: str):
     print(f"[{timestamp}] {msg}", file=sys.stderr)
 
 def extract_audio(video_path: str, audio_path: str) -> None:
-    """Extrai áudio do vídeo com configurações otimizadas"""
+    """Extrai áudio do vídeo com configurações ULTRA otimizadas"""
     log(f"Extraindo áudio de {video_path}")
     
     cmd = [
@@ -38,6 +38,7 @@ def extract_audio(video_path: str, audio_path: str) -> None:
         "-af", "highpass=f=200,lowpass=f=8000,volume=1.5",  # Filtros otimizados + volume
         "-threads", "8",  # Usar todos os threads
         "-preset", "ultrafast",  # Preset mais rápido
+        "-loglevel", "error",  # Minimizar logs
         audio_path
     ]
     
@@ -78,12 +79,13 @@ def split_audio_simple(audio_path: str, out_dir: str) -> list:
         # Otimizações para velocidade
         chunk = chunk.set_frame_rate(16000).set_channels(1)
         
-        # Otimizações adicionais de áudio para velocidade
+        # Otimizações ULTRA rápidas de áudio
         chunk = chunk.normalize()  # Normalizar volume
         chunk = chunk.high_pass_filter(200)  # Filtrar baixas frequências
         chunk = chunk.low_pass_filter(8000)  # Filtrar altas frequências
         
-        chunk.export(chunk_path, format="wav", parameters=["-threads", "8"])
+        # Export otimizado para velocidade
+        chunk.export(chunk_path, format="wav", parameters=["-threads", "8", "-compression_level", "0"])
         
         chunk_paths.append((chunk_path, start / 1000, end / 1000))
         start = end
@@ -118,7 +120,14 @@ def transcribe_chunk_simple(chunk_path: str, start_sec: float, end_sec: float, m
             without_timestamps=False,  # Manter timestamps
             max_initial_timestamp=1.0,  # Limitar timestamp inicial
             prepend_punctuations="\"'([{-",  # Configurar pontuação (sem caracteres especiais)
-            append_punctuations="\"'.!?):]}"
+            append_punctuations="\"'.!?):]}",
+            # Configurações ULTRA rápidas
+            patience=1,  # Mínimo patience para velocidade
+            length_penalty=1.0,  # Penalidade mínima
+            repetition_penalty=1.0,  # Penalidade mínima
+            no_speech_threshold=0.8,  # Mais tolerante para velocidade
+            logprob_threshold=-1.0,  # Mínimo threshold
+            compression_ratio_threshold=2.4  # Máximo threshold
         )
         
         segments = []
@@ -194,23 +203,27 @@ def main():
         except:
             pass
         
-        # Carregar modelo UMA VEZ com configurações otimizadas
-        log("Carregando modelo Whisper medium com configurações otimizadas...")
+        # Carregar modelo UMA VEZ com configurações ULTRA otimizadas
+        log("Carregando modelo Whisper small com configurações ULTRA otimizadas...")
         model = whisper.load_model(WHISPER_MODEL, device="cpu")
         
         # Configurar PyTorch para máxima performance
         torch.set_num_threads(8)  # Usar todos os cores disponíveis
         torch.set_default_dtype(torch.float32)
         
-        # Otimizações adicionais para velocidade
+        # Otimizações ULTRA rápidas
         torch.backends.cudnn.benchmark = True  # Otimizar convoluções
         torch.backends.cudnn.deterministic = False  # Permitir otimizações não-determinísticas
+        torch.backends.cudnn.enabled = True  # Habilitar cuDNN
         
         # Configurar cache de modelo para reutilização
         if hasattr(model, 'encoder'):
             model.encoder.eval()  # Modo de avaliação para velocidade
         if hasattr(model, 'decoder'):
             model.decoder.eval()  # Modo de avaliação para velocidade
+        
+        # Otimizações de memória
+        torch.set_grad_enabled(False)  # Desabilitar gradientes para velocidade
         
         log("Modelo carregado com sucesso!")
         

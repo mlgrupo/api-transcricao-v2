@@ -1,7 +1,10 @@
-import { Logger } from "../../utils/logger";
-import fs from "fs/promises";
-import { spawn } from "child_process";
-import path from "path";
+import * as fs from 'fs';
+import * as path from 'path';
+import { spawn } from 'child_process';
+import { Logger } from '../../utils/logger';
+
+// Importar fs.promises para operações assíncronas
+import { access } from 'fs/promises';
 
 /**
  * Interface simplificada para versão gratuita
@@ -73,67 +76,50 @@ export class TranscriptionProcessor {
    * 2. Executar transcrição principal (como seguir a receita principal)
    * 3. Se falhar, usar fallbacks progressivos (como ter receitas alternativas)
    */
-  public async transcribeAudio(
-    videoPath: string, // agora espera o caminho do vídeo
-    videoId: string,
-    outputDir?: string
-  ): Promise<string> {
-    this.logger.info(`🎯 Iniciando transcrição SIMPLES para videoId: ${videoId}`, {
-      videoPath,
-      outputDir,
-      config: this.config,
-      approach: "simple_transcribe.py (sequencial, sem erros)"
-    });
-
-    const scriptPath = path.join(process.cwd(), "python", "simple_transcribe.py");
-
+  public async transcribeVideo(videoPath: string, outputDir?: string, videoId?: string): Promise<string> {
     try {
-      // Verificar se o script existe
-      const scriptExists = await fs.access(scriptPath).then(() => true).catch(() => false);
-      if (!scriptExists) {
-        throw new Error(`Script simple_transcribe.py não encontrado em ${scriptPath}`);
-      }
-      // Verificar se o vídeo existe
-      const videoExists = await fs.access(videoPath).then(() => true).catch(() => false);
-      if (!videoExists) {
-        throw new Error(`Arquivo de vídeo não encontrado: ${videoPath}`);
+      this.logger.info("🎯 Iniciando transcrição ROBUSTA para videoId:", { videoId });
+      
+      // Usar script robusto otimizado
+      const scriptPath = path.join(process.cwd(), "python", "robust_transcribe.py");
+      
+      if (!fs.existsSync(scriptPath)) {
+        throw new Error(`Script robusto não encontrado: ${scriptPath}`);
       }
       
-      // Atualizar progresso no banco
-      await this.updateVideoProgress(videoId, 60, "Transcrevendo áudio...");
+      this.logger.info("Executando script Python robusto", {
+        scriptPath,
+        videoPath
+      });
       
-      // Executar o script Python
-      const startTime = Date.now();
-      const result = await this.executeSimpleTranscription(scriptPath, videoPath, outputDir, videoId);
-      const duration = (Date.now() - startTime) / 1000;
+      const result = await this.executeRobustTranscription(scriptPath, videoPath, outputDir, videoId);
       
-      // Atualizar progresso final
-      await this.updateVideoProgress(videoId, 90, "Processando transcrição...");
+      if (!result.segments || result.segments.length === 0) {
+        throw new Error("Nenhum segmento de transcrição gerado");
+      }
       
       // Processar resultado
-      const transcription = this.processSegmentsResult(result, duration, videoId);
+      const transcription = this.processSegmentsResult(result, videoId);
+      const duration = result.metadata?.duration_seconds || 0;
       
-      // Atualizar progresso final
-      await this.updateVideoProgress(videoId, 100, "Transcrição concluída");
-      
-      this.logger.info("✅ Transcrição SIMPLES concluída com sucesso", {
+      this.logger.info("✅ Transcrição ROBUSTA concluída com sucesso", {
         videoId,
         durationSeconds: duration,
         segments: result.segments?.length || 0,
         textLength: transcription.length,
         hasWordTimestamps: result.segments?.some(seg => seg.words && seg.words.length > 0) || false,
         metadata: result.metadata,
-        speedFactor: result.metadata?.speed_factor ? `${result.metadata.speed_factor.toFixed(1)}x` : "N/A"
+        speedFactor: result.metadata?.speed_factor ? `${result.metadata.speed_factor.toFixed(1)}x` : "N/A",
+        workersUsed: result.metadata?.workers_used || 1
       });
-      return transcription;
-    } catch (error: any) {
-      // Atualizar progresso de erro
-      await this.updateVideoProgress(videoId, 0, "Erro na transcrição");
       
-      this.logger.error("❌ Erro na transcrição:", {
+      return transcription;
+      
+    } catch (error) {
+      this.logger.error("❌ Erro na transcrição ROBUSTA:", {
         videoId,
-        error: error.message,
-        stack: error.stack
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined
       });
       throw error;
     }
@@ -162,10 +148,9 @@ export class TranscriptionProcessor {
       segments_count: number;
       total_characters: number;
       language: string;
-      language_confidence: number;
-      model_used: string;
-      workers_used: number;
       chunks_processed: number;
+      workers_used: number;
+      model_used: string;
       speed_factor?: number;
     };
   }> {
@@ -436,6 +421,75 @@ export class TranscriptionProcessor {
     });
   }
 
+  private async executeRobustTranscription(
+    scriptPath: string,
+    videoPath: string,
+    outputDir?: string,
+    videoId?: string
+  ): Promise<{ 
+    segments: Array<{ 
+      start: number; 
+      end: number; 
+      text: string; 
+      words?: Array<{
+        word: string;
+        start: number;
+        end: number;
+        probability: number;
+      }>;
+    }>;
+    metadata?: {
+      duration_seconds: number;
+      processing_time_seconds: number;
+      segments_count: number;
+      total_characters: number;
+      language: string;
+      chunks_processed: number;
+      workers_used: number;
+      model_used: string;
+      speed_factor?: number;
+    };
+  }> {
+    return new Promise((resolve, reject) => {
+      const pythonProcess = spawn('python', [scriptPath, videoPath], {
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      pythonProcess.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+
+      pythonProcess.stderr.on('data', (data) => {
+        const logLine = data.toString().trim();
+        if (logLine) {
+          this.logger.info(`[robust_transcribe.py][stderr] | ${JSON.stringify({ stderr: logLine })}`);
+        }
+        stderr += data.toString();
+      });
+
+      pythonProcess.on('close', (code) => {
+        if (code === 0) {
+          try {
+            const result = JSON.parse(stdout);
+            resolve(result);
+          } catch (error) {
+            reject(new Error(`Erro ao parsear resultado: ${error}`));
+          }
+        } else {
+          this.logger.error(`[robust_transcribe.py][error] | ${JSON.stringify({ code, stderr, stdout })}`);
+          reject(new Error(`Script Python falhou com código ${code}`));
+        }
+      });
+
+      pythonProcess.on('error', (error) => {
+        reject(new Error(`Erro ao executar script Python: ${error.message}`));
+      });
+    });
+  }
+
   private processSegmentsResult(
     result: { 
       segments: Array<{ 
@@ -451,40 +505,36 @@ export class TranscriptionProcessor {
       }>;
       metadata?: any;
     }, 
-    duration: number, 
-    videoId: string
+    videoId?: string
   ): string {
     if (!result.segments || result.segments.length === 0) {
       this.logger.warn("Nenhum segmento encontrado no resultado", { videoId });
-      return "Nenhuma transcrição gerada.";
+      return "Não foi possível transcrever este vídeo automaticamente. Por favor, revise manualmente o conteúdo.";
     }
 
-    // Ordenar segmentos por tempo de início
-    const sortedSegments = result.segments.sort((a, b) => a.start - b.start);
+    // Construir transcrição com timestamps
+    const transcriptionParts: string[] = [];
     
-    // Construir transcrição com timestamps precisos
-    const transcriptionLines: string[] = [];
-    
-    for (const segment of sortedSegments) {
-      const startTime = this.formatTimestamp(segment.start);
-      const endTime = this.formatTimestamp(segment.end);
-      const text = segment.text.trim();
+    for (const seg of result.segments) {
+      const startTime = this.formatTimestamp(seg.start);
+      const endTime = this.formatTimestamp(seg.end);
+      const text = seg.text.trim();
       
       if (text) {
-        transcriptionLines.push(`[${startTime} → ${endTime}] ${text}`);
+        transcriptionParts.push(`[${startTime} → ${endTime}] ${text}`);
       }
     }
+
+    const transcription = transcriptionParts.join('\n\n');
     
-    const finalTranscription = transcriptionLines.join('\n\n');
-    
-    this.logger.info("Transcrição processada", {
+    this.logger.info("Transcrição processada com sucesso", {
       videoId,
-      segmentsCount: sortedSegments.length,
-      totalLength: finalTranscription.length,
-      processingTime: duration
+      segments: result.segments.length,
+      textLength: transcription.length,
+      hasWordTimestamps: result.segments.some((seg: any) => seg.words && seg.words.length > 0)
     });
-    
-    return finalTranscription;
+
+    return transcription;
   }
 
   private formatTimestamp(seconds: number): string {
@@ -562,7 +612,7 @@ export class TranscriptionProcessor {
       const recommendations: string[] = [];
       
       // VERIFICAÇÃO 1: Python
-      const pythonAvailable = await fs.access('python')
+      const pythonAvailable = await access('python')
         .then(() => {
           this.logger.info("✅ Python detectado (pasta python/ presente)");
           return true;
@@ -574,7 +624,7 @@ export class TranscriptionProcessor {
       
       // VERIFICAÇÃO 2: Script principal
       const scriptPath = path.join(process.cwd(), "python", "transcription.py");
-      const scriptAvailable = await fs.access(scriptPath)
+      const scriptAvailable = await access(scriptPath)
         .then(() => {
           this.logger.info("✅ Script principal encontrado", { path: scriptPath });
           return true;
@@ -587,7 +637,7 @@ export class TranscriptionProcessor {
       // VERIFICAÇÃO 3: Whisper
       let whisperAvailable = false;
       if (pythonAvailable) {
-        whisperAvailable = await fs.access(path.join(process.cwd(), "python", "whisper")).then(() => true).catch(() => false);
+        whisperAvailable = await access(path.join(process.cwd(), "python", "whisper")).then(() => true).catch(() => false);
         if (whisperAvailable) {
           this.logger.info("✅ Whisper instalado (pasta python/whisper presente)");
         } else {
@@ -598,7 +648,7 @@ export class TranscriptionProcessor {
       // VERIFICAÇÃO 4: Dependências da diarização
       let diarizationAvailable = false;
       if (pythonAvailable) {
-        diarizationAvailable = await fs.access(path.join(process.cwd(), "python", "pydub")).then(() => true).catch(() => false);
+        diarizationAvailable = await access(path.join(process.cwd(), "python", "pydub")).then(() => true).catch(() => false);
         if (diarizationAvailable) {
           this.logger.info("✅ Dependências de diarização disponíveis (pasta python/pydub presente)");
         } else {
@@ -607,7 +657,7 @@ export class TranscriptionProcessor {
       }
       
       // VERIFICAÇÃO 5: FFmpeg
-      const ffmpegAvailable = await fs.access('ffmpeg')
+      const ffmpegAvailable = await access('ffmpeg')
         .then(() => {
           this.logger.info("✅ FFmpeg detectado (binário ffmpeg presente)");
           return true;
@@ -690,21 +740,21 @@ export class TranscriptionProcessor {
       this.logger.info("🧪 Executando teste rápido do sistema de transcrição...");
       
       // Teste simples: verificar se conseguimos importar as bibliotecas essenciais
-      await fs.access(path.join(process.cwd(), "python", "whisper")).then(() => {
+      await access(path.join(process.cwd(), "python", "whisper")).then(() => {
         this.logger.info("✅ Whisper instalado (pasta python/whisper presente)");
       }).catch(() => {
         this.logger.error("❌ Whisper não encontrado. Verifique a pasta python/whisper");
         throw new Error("Whisper não encontrado");
       });
 
-      await fs.access(path.join(process.cwd(), "python", "pydub")).then(() => {
+      await access(path.join(process.cwd(), "python", "pydub")).then(() => {
         this.logger.info("✅ pydub instalado (pasta python/pydub presente)");
       }).catch(() => {
         this.logger.error("❌ pydub não encontrado. Verifique a pasta python/pydub");
         throw new Error("pydub não encontrado");
       });
 
-      await fs.access('ffmpeg').then(() => {
+      await access('ffmpeg').then(() => {
         this.logger.info("✅ FFmpeg instalado (binário ffmpeg presente)");
       }).catch(() => {
         this.logger.error("❌ FFmpeg não encontrado. Verifique o binário ffmpeg");

@@ -160,28 +160,13 @@ export class VideoProcessor {
       // Download do vídeo já foi feito em videoPath
       // Não precisa mais converter para MP3
       // Transcrever vídeo diretamente
-      this.logger.info("Iniciando transcrição", { videoId });
-      let transcription: string;
-      try {
-        await this.videoRepository.updateProgress(videoId, 55, "Iniciando transcrição do vídeo");
-        if (cancelObj?.cancelled) throw new Error('Processamento cancelado pelo usuário');
-        transcription = await this.transcriptionProcessor.transcribeAudio(
-          videoPath, // agora passa o caminho do vídeo
-          videoId
-        );
-        this.logger.info("Transcrição concluída", { videoId });
-        await this.videoRepository.updateProgress(videoId, 75, "Transcrição concluída");
-      } catch (transcriptionError: any) {
-        this.logger.error(
-          "Erro na transcrição",
-          {
-            videoId,
-            error: transcriptionError.message,
-          }
-        );
-        transcription =
-          "Não foi possível transcrever este vídeo automaticamente. Por favor, revise manualmente o conteúdo.";
-      }
+      this.logger.info("🎯 Iniciando transcrição do vídeo", { videoId });
+      
+      const transcription = await this.transcriptionProcessor.transcribeVideo(
+        videoPath,
+        videoFolderPath,
+        videoId
+      );
 
       await this.logger.info(
         `✅ Transcrição concluída para o vídeo ${videoId}`,
