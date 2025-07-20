@@ -48,16 +48,25 @@ def split_audio_streaming(file_path, chunk_duration_ms=5 * 60 * 1000):
 
 def transcribe_audio(audio_path):
     try:
+        logger.info(f"🎯 Iniciando transcrição do arquivo: {audio_path}")
+        
         text_processor = basic_text_processor()
+        logger.info("✅ Text processor inicializado")
+        
+        logger.info("🔄 Carregando modelo Whisper Large...")
         model = whisper.load_model("large")  # Alterar para um modelo maior, se necessário
+        logger.info("✅ Modelo Whisper Large carregado com sucesso")
 
         full_text = ""
         chunk_count = 0
         all_segments = []
 
+        logger.info("📂 Dividindo áudio em chunks...")
         for chunk_path, chunk_index in split_audio_streaming(audio_path):
             chunk_count += 1
+            logger.info(f"🎵 Processando chunk {chunk_count}: {chunk_path}")
 
+            logger.info(f"🔄 Transcrevendo chunk {chunk_count}...")
             result = model.transcribe(
                 chunk_path,
                 language="pt",
@@ -68,9 +77,13 @@ def transcribe_audio(audio_path):
                     "Corrija erros comuns e normalize números."
                 )
             )
+            logger.info(f"✅ Chunk {chunk_count} transcrito com sucesso")
 
             # Ajustar timestamps para posição real no áudio
             chunk_start_time = chunk_index * 5 * 60  # 5 minutos por chunk
+            logger.info(f"⏰ Ajustando timestamps para chunk {chunk_count} (início: {chunk_start_time}s)")
+            
+            segments_count = 0
             for segment in result.get("segments", []):
                 segment["start"] += chunk_start_time
                 segment["end"] += chunk_start_time
@@ -80,6 +93,9 @@ def transcribe_audio(audio_path):
                 segment["text"] = processed_text
                 
                 all_segments.append(segment)
+                segments_count += 1
+
+            logger.info(f"📝 Chunk {chunk_count} processado: {segments_count} segmentos")
 
             # Adicionar texto processado ao resultado completo
             processed = text_processor.process(result["text"])
@@ -87,9 +103,13 @@ def transcribe_audio(audio_path):
 
             try:
                 os.remove(chunk_path)
-            except Exception:
-                pass
+                logger.info(f"🗑️ Arquivo temporário removido: {chunk_path}")
+            except Exception as e:
+                logger.warning(f"⚠️ Erro ao remover arquivo temporário {chunk_path}: {e}")
 
+        logger.info(f"🎉 Transcrição concluída com sucesso!")
+        logger.info(f"📊 Resumo: {chunk_count} chunks, {len(all_segments)} segmentos, {len(full_text)} caracteres")
+        
         return json.dumps({
             "status": "success",
             "text": full_text.strip(),
@@ -99,6 +119,7 @@ def transcribe_audio(audio_path):
         }, ensure_ascii=False)
 
     except Exception as e:
+        logger.error(f"💥 Erro na transcrição: {e}")
         return json.dumps({
             "status": "error",
             "error": str(e)
