@@ -12,7 +12,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 
 # Configurações
-MAX_CHUNKS = 8
+MIN_CHUNK_SECONDS = 30
+IDEAL_CHUNK_SECONDS = 1800  # 30 minutos
+MAX_CHUNKS = 12  # Limite superior para vídeos muito longos
 MAX_CONCURRENT_CHUNKS = 2 # Limitar para máxima estabilidade em CPU
 WHISPER_MODEL = "medium"
 
@@ -38,25 +40,33 @@ def extract_audio(video_path, audio_path):
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 # Utilitário para dividir áudio em chunks
-def split_audio(audio_path, out_dir, max_chunks=MAX_CHUNKS):
-    log(f"Dividindo áudio {audio_path} em até {max_chunks} partes...")
+def split_audio(audio_path, out_dir):
     audio = AudioSegment.from_wav(audio_path)
-    duration_ms = len(audio)
-    if duration_ms == 0:
-        raise Exception("Áudio extraído está vazio!")
-    chunk_length = math.ceil(duration_ms / max_chunks)
+    duration_sec = len(audio) / 1000
+    # Calcular número ideal de chunks
+    n_chunks = max(1, min(MAX_CHUNKS, math.ceil(duration_sec / IDEAL_CHUNK_SECONDS)))
+    chunk_length = max(MIN_CHUNK_SECONDS, duration_sec / n_chunks)
     chunk_paths = []
-    for i in range(max_chunks):
-        start = i * chunk_length
-        end = min((i + 1) * chunk_length, duration_ms)
+    for i in range(n_chunks):
+        start = int(i * chunk_length * 1000)
+        end = int(min((i + 1) * chunk_length * 1000, len(audio)))
         if start >= end:
             break
         chunk = audio[start:end]
         chunk_path = os.path.join(out_dir, f"chunk_{i+1}.wav")
         chunk.export(chunk_path, format="wav")
         chunk_paths.append((chunk_path, start / 1000, end / 1000))
-    if not chunk_paths:
-        raise Exception("Nenhum chunk de áudio foi criado!")
+    # Se o último chunk for muito pequeno, junte ao anterior
+    if len(chunk_paths) > 1 and (chunk_paths[-1][2] - chunk_paths[-1][1]) < MIN_CHUNK_SECONDS:
+        prev_path, prev_start, prev_end = chunk_paths[-2]
+        last_path, last_start, last_end = chunk_paths[-1]
+        audio_prev = AudioSegment.from_wav(prev_path)
+        audio_last = AudioSegment.from_wav(last_path)
+        combined = audio_prev + audio_last
+        combined.export(prev_path, format="wav")
+        chunk_paths[-2] = (prev_path, prev_start, last_end)
+        chunk_paths.pop()
+        os.remove(last_path)
     return chunk_paths
 
 # Função para transcrever um chunk
@@ -66,7 +76,7 @@ def transcribe_chunk(chunk_path, start_sec, end_sec, model):
         if USE_TURBO:
             global TURBO_MODEL
             if TURBO_MODEL is None:
-                TURBO_MODEL = WhisperModel("large-v2", device="cpu", compute_type="int8")
+                TURBO_MODEL = WhisperModel("medium", device="cpu", compute_type="int8", num_workers=1)
             segments, info = TURBO_MODEL.transcribe(chunk_path, beam_size=5, word_timestamps=True)
             segs = []
             for seg in segments:
@@ -112,7 +122,7 @@ def main():
         except Exception as e:
             log(f"Não foi possível apagar vídeo: {e}")
         log("Dividindo áudio em chunks...")
-        chunk_infos = split_audio(audio_path, temp_dir, MAX_CHUNKS)
+        chunk_infos = split_audio(audio_path, temp_dir)
         log(f"{len(chunk_infos)} chunks criados.")
         try:
             os.remove(audio_path)
@@ -121,11 +131,11 @@ def main():
         log("Carregando modelo Whisper...")
         if USE_TURBO:
             model = None  # handled in transcribe_chunk
-            log("Modo TURBO: usando faster-whisper (large-v2, int8, CPU)")
+            log("Modo TURBO: usando faster-whisper (medium, int8, CPU)")
         else:
-            model = whisper.load_model(WHISPER_MODEL, device="cpu")
-            torch.set_default_dtype(torch.float32)  # Forçar FP32
-            log("Modelo Whisper padrão carregado.")
+            model = whisper.load_model("medium", device="cpu")
+            torch.set_default_dtype(torch.float32)
+            log("Modelo Whisper padrão (medium) carregado.")
         log("Modelo carregado. Iniciando transcrição dos chunks...")
         results = []
         with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_CHUNKS) as executor:
