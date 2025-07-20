@@ -33,8 +33,7 @@ QUALITY_CONFIGS = {
         "best_of": 1,    # Mínimo para velocidade
         "temperature": 0.0,
         "patience": 1,   # Mínimo patience
-        "length_penalty": 1.0,
-        "repetition_penalty": 1.0
+        "length_penalty": 1.0
     },
     "balanced": {
         "model": "medium", 
@@ -42,8 +41,7 @@ QUALITY_CONFIGS = {
         "best_of": 1,    # Mínimo para velocidade
         "temperature": 0.0,
         "patience": 1,   # Mínimo patience
-        "length_penalty": 1.0,
-        "repetition_penalty": 1.0
+        "length_penalty": 1.0
     },
     "high_quality": {
         "model": "medium",
@@ -51,8 +49,7 @@ QUALITY_CONFIGS = {
         "best_of": 2,    # Reduzido para velocidade
         "temperature": 0.0,
         "patience": 2,   # Mínimo patience
-        "length_penalty": 1.0,
-        "repetition_penalty": 1.0
+        "length_penalty": 1.0
     }
 }
 
@@ -164,7 +161,6 @@ def transcribe_chunk_robust(chunk_info: tuple, config: dict, total_chunks: int, 
             temperature=config["temperature"],
             patience=config["patience"],
             length_penalty=config["length_penalty"],
-            repetition_penalty=config["repetition_penalty"],
             word_timestamps=True,
             condition_on_previous_text=False,
             initial_prompt=None,
