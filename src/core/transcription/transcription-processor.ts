@@ -166,23 +166,102 @@ export class TranscriptionProcessor {
           pythonCommand = 'python';
         }
         
-        const { stdout } = await execAsync(`${pythonCommand} "${scriptPath}" "${videoPath}"`, {
-          maxBuffer: 1024 * 1024 * 10, // 10MB buffer
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            PYTHONPATH: path.join(process.cwd(), 'python'),
-            OMP_NUM_THREADS: '4',
-            MKL_NUM_THREADS: '4',
-            PYTORCH_NUM_THREADS: '4'
-          }
+        // Usar spawn para capturar logs em tempo real
+        const { spawn } = require('child_process');
+        
+        const stdout = await new Promise<string>((resolve, reject) => {
+          const pythonProcess = spawn(pythonCommand, [scriptPath, videoPath], {
+            stdio: ['pipe', 'pipe', 'pipe'],
+            env: {
+              ...process.env,
+              PYTHONPATH: path.join(process.cwd(), 'python'),
+              OMP_NUM_THREADS: '4',
+              MKL_NUM_THREADS: '4',
+              PYTORCH_NUM_THREADS: '4'
+            }
+          });
+
+          let stdout = '';
+          let stderr = '';
+
+          // Capturar stdout (logs do Python)
+          pythonProcess.stdout.on('data', (data: Buffer) => {
+            const output = data.toString();
+            stdout += output;
+            
+            // Log em tempo real
+            output.split('\n').forEach((line: string) => {
+              if (line.trim()) {
+                const trimmedLine = line.trim();
+                
+                // Verificar se é JSON (resultado final)
+                if (trimmedLine.startsWith('{') && trimmedLine.endsWith('}')) {
+                  this.logger.info(`[transcribe.py][result] JSON detectado`);
+                  return; // Não logar o JSON completo
+                }
+                
+                // Logar todos os outros outputs como info
+                this.logger.info(`[transcribe.py][stdout] ${trimmedLine}`);
+              }
+            });
+          });
+
+          // Capturar stderr (warnings e erros do Python)
+          pythonProcess.stderr.on('data', (data: Buffer) => {
+            const output = data.toString();
+            stderr += output;
+            
+            // Log de stderr em tempo real
+            output.split('\n').forEach((line: string) => {
+              if (line.trim()) {
+                const trimmedLine = line.trim();
+                
+                // Detectar diferentes tipos de logs
+                if (trimmedLine.toLowerCase().includes('error') || 
+                    trimmedLine.toLowerCase().includes('exception') ||
+                    trimmedLine.toLowerCase().includes('failed') ||
+                    trimmedLine.toLowerCase().includes('traceback')) {
+                  this.logger.error(`[transcribe.py][error] ${trimmedLine}`);
+                } else if (trimmedLine.toLowerCase().includes('warning') ||
+                           trimmedLine.toLowerCase().includes('userwarning')) {
+                  this.logger.warn(`[transcribe.py][warning] ${trimmedLine}`);
+                } else if (trimmedLine.toLowerCase().includes('info') ||
+                           trimmedLine.toLowerCase().includes('debug')) {
+                  this.logger.info(`[transcribe.py][info] ${trimmedLine}`);
+                } else {
+                  // Logs gerais de progresso (incluindo logs do Whisper)
+                  this.logger.info(`[transcribe.py][progress] ${trimmedLine}`);
+                }
+              }
+            });
+          });
+
+          // Processo finalizado
+          pythonProcess.on('close', (code: number) => {
+            this.logger.info(`🏁 Processo Python finalizado com código: ${code}`);
+            
+            if (code === 0) {
+              this.logger.info(`✅ Processo Python executado com sucesso`);
+              resolve(stdout);
+            } else {
+              this.logger.error(`❌ Processo Python falhou com código ${code}`);
+              this.logger.error(`📄 Stderr: ${stderr}`);
+              reject(new Error(`Processo Python falhou com código ${code}: ${stderr}`));
+            }
+          });
+
+          // Erro no processo
+          pythonProcess.on('error', (error: Error) => {
+            this.logger.error(`💥 Erro ao executar processo Python: ${error.message}`);
+            reject(error);
+          });
         });
 
         const duration = (Date.now() - startTime) / 1000;
 
-        let result;
+        let parsedResult;
         try {
-          result = JSON.parse(stdout.trim());
+          parsedResult = JSON.parse(stdout.trim());
         } catch (e: any) {
           this.logger.error("Erro ao parsear saída da transcrição:", {
             erro: e.message,
@@ -191,21 +270,21 @@ export class TranscriptionProcessor {
           throw new Error("Erro ao processar resultado da transcrição");
         }
 
-        if (result.status === "error") {
-          throw new Error(result.error || "Erro desconhecido na transcrição");
+        if (parsedResult.status === "error") {
+          throw new Error(parsedResult.error || "Erro desconhecido na transcrição");
         }
 
-        if (!result.text) {
+        if (!parsedResult.text) {
           throw new Error("Transcrição retornou vazia");
         }
 
         this.logger.info("Transcrição concluída", {
           durationSeconds: duration,
           audioPath: videoPath,
-          chunks: result.chunks,
+          chunks: parsedResult.chunks,
         });
 
-        return result.text;
+        return parsedResult.text;
       } catch (pythonError: any) {
         // Log the error but continue with alternative approach
         this.logger.error("Erro executando script Python:", {

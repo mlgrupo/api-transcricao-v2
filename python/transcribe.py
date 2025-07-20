@@ -119,7 +119,6 @@ def transcribe_audio(audio_path):
         }, ensure_ascii=False)
 
     except Exception as e:
-        logger.error(f"💥 Erro na transcrição: {e}")
         return json.dumps({
             "status": "error",
             "error": str(e)
