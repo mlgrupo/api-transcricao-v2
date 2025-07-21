@@ -28,31 +28,16 @@ import threading
 # Função utilitária para carregar pipeline de diarização
 
 def load_pyannote_pipeline():
-    """Pipeline ultra-otimizado para velocidade máxima."""
+    """Pipeline básico do pyannote.audio sem configurações customizadas."""
     hf_token = os.environ.get("HUGGINGFACE_TOKEN")
     if not hf_token:
         raise RuntimeError("Variável de ambiente HUGGINGFACE_TOKEN não definida.")
     
+    # Usar pipeline padrão sem configurações customizadas
     pipeline = PyannotePipeline.from_pretrained(
         "pyannote/speaker-diarization-3.1", 
         use_auth_token=hf_token
     )
-    
-    # Configurações ULTRA-RÁPIDAS para CCX33 (parâmetros válidos)
-    pipeline.instantiate({
-        "segmentation": {
-            "threshold": 0.3  # Threshold muito baixo = velocidade máxima
-        },
-        "clustering": {
-            "method": "fast",  # Clustering mais rápido
-            "min_clusters": 1,
-            "max_clusters": 10  # Limitar número de locutores
-        },
-        "embedding": {
-            "duration": 3.0,  # Janela menor = mais rápido
-            "step": 1.5  # Passo maior = menos processamento
-        }
-    })
     
     device = torch.device("cpu")
     pipeline.to(device)
