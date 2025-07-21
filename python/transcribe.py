@@ -147,6 +147,85 @@ def transcribe_chunk(args):
         pass
     return segments
 
+def diarize_audio(audio_path, pipeline=None, max_duration_minutes=30):
+    """Diarização com fallback automático para segmentação simples."""
+    try:
+        if pipeline is None:
+            pipeline = load_pyannote_pipeline()
+        
+        audio = AudioSegment.from_file(audio_path)
+        duration_minutes = len(audio) / (1000 * 60)
+        
+        logger.info(f"🚀 Diarização iniciada para {duration_minutes:.1f}min de áudio")
+        
+        diarization_done = threading.Event()
+        def progress_log():
+            if not diarization_done.is_set():
+                logger.info("⚡ Diarização em andamento...")
+                threading.Timer(30, progress_log).start()
+        
+        progress_log()
+        
+        # Tentar diarização com timeout
+        timeout_seconds = min(duration_minutes * 60, 1800)
+        logger.info(f"⏱️ Timeout: {timeout_seconds/60:.1f} minutos")
+        
+        diarization = pipeline(audio_path)
+        diarized_segments = []
+        for turn, _, speaker in diarization.itertracks(yield_label=True):
+            diarized_segments.append({
+                'speaker': speaker,
+                'start': float(turn.start),
+                'end': float(turn.end)
+            })
+        
+        diarization_done.set()
+        logger.info(f"⚡ Diarização concluída: {len(diarized_segments)} segmentos")
+        return diarized_segments
+        
+    except Exception as e:
+        logger.error(f"❌ Erro na diarização: {e}")
+        logger.info("🔄 Usando fallback: segmentação simples por tempo")
+        return create_simple_segments(audio_path, segment_duration=60)
+
+def create_simple_segments(audio_path, segment_duration=30):
+    """Cria segmentos simples baseados em tempo quando diarização falha."""
+    audio = AudioSegment.from_file(audio_path)
+    duration_seconds = len(audio) / 1000
+    segments = []
+    
+    for i in range(0, int(duration_seconds), segment_duration):
+        segments.append({
+            'speaker': f'SPEAKER_{i//segment_duration:02d}',
+            'start': float(i),
+            'end': float(min(i + segment_duration, duration_seconds))
+        })
+    
+    return segments
+
+def align_segments_with_speakers(whisper_segments, diarized_segments):
+    """Alinha os segmentos do Whisper com os segmentos diarizados por maior interseção temporal."""
+    def find_best_speaker(start, end):
+        best_speaker = None
+        max_overlap = 0
+        for seg in diarized_segments:
+            overlap = max(0, min(end, seg['end']) - max(start, seg['start']))
+            if overlap > max_overlap:
+                max_overlap = overlap
+                best_speaker = seg['speaker']
+        return best_speaker or 'SPEAKER_00'
+
+    aligned = []
+    for seg in whisper_segments:
+        speaker = find_best_speaker(seg['start'], seg['end'])
+        aligned.append({
+            'speaker': speaker,
+            'start': seg['start'],
+            'end': seg['end'],
+            'text': seg['text']
+        })
+    return aligned
+
 def transcribe_audio(audio_path):
     try:
         # NOVO: extrair áudio se necessário
@@ -165,7 +244,7 @@ def transcribe_audio(audio_path):
         model = whisper.load_model("small")
         logger.info("✅ Modelo Whisper Small carregado com sucesso")
 
-        # --- Diarização do áudio completo ---
+        # --- Diarização com fallback automático ---
         skip_diarization = os.environ.get("SKIP_DIARIZATION", "false").lower() == "true"
         
         if skip_diarization:
@@ -173,8 +252,13 @@ def transcribe_audio(audio_path):
             diarized_segments = create_simple_segments(audio_path)
         else:
             logger.info("🔊 Executando diarização de locutores (pyannote, CPU)...")
-            diarization_pipeline = load_pyannote_pipeline()
-            diarized_segments = diarize_audio(audio_path, diarization_pipeline)
+            try:
+                diarization_pipeline = load_pyannote_pipeline()
+                diarized_segments = diarize_audio(audio_path, diarization_pipeline)
+            except Exception as e:
+                logger.error(f"❌ Erro ao carregar pipeline de diarização: {e}")
+                logger.info("🔄 Usando segmentação simples como fallback...")
+                diarized_segments = create_simple_segments(audio_path)
 
         logger.info(f"✅ Diarização concluída: {len(diarized_segments)} segmentos encontrados")
         chunk_args = []
@@ -238,86 +322,6 @@ def transcribe_audio(audio_path):
             "status": "error",
             "error": str(e)
         }, ensure_ascii=False)
-
-def diarize_audio(audio_path, pipeline=None, max_duration_minutes=30):
-    """Diarização ultra-otimizada para velocidade."""
-    if pipeline is None:
-        pipeline = load_pyannote_pipeline()
-    
-    audio = AudioSegment.from_file(audio_path)
-    duration_minutes = len(audio) / (1000 * 60)
-    
-    logger.info(f"🚀 Diarização ULTRA-RÁPIDA iniciada para {duration_minutes:.1f}min de áudio")
-    
-    diarization_done = threading.Event()
-    def progress_log():
-        if not diarization_done.is_set():
-            logger.info("⚡ Diarização ULTRA-RÁPIDA em andamento...")
-            threading.Timer(30, progress_log).start()  # Log a cada 30 segundos
-    
-    progress_log()
-    
-    try:
-        # Timeout mais agressivo
-        timeout_seconds = min(duration_minutes * 60, 1800)  # Máximo 30 min
-        logger.info(f"⏱️ Timeout otimizado: {timeout_seconds/60:.1f} minutos")
-        
-        diarization = pipeline(audio_path)
-        diarized_segments = []
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
-            diarized_segments.append({
-                'speaker': speaker,
-                'start': float(turn.start),
-                'end': float(turn.end)
-            })
-        
-        diarization_done.set()
-        logger.info(f"⚡ Diarização ULTRA-RÁPIDA concluída: {len(diarized_segments)} segmentos")
-        return diarized_segments
-        
-    except Exception as e:
-        diarization_done.set()
-        logger.error(f"❌ Erro na diarização: {e}")
-        logger.info("🔄 Usando fallback otimizado...")
-        return create_simple_segments(audio_path, segment_duration=60)  # Segmentos de 1 minuto
-
-def create_simple_segments(audio_path, segment_duration=30):
-    """Cria segmentos simples baseados em tempo quando diarização falha."""
-    audio = AudioSegment.from_file(audio_path)
-    duration_seconds = len(audio) / 1000
-    segments = []
-    
-    for i in range(0, int(duration_seconds), segment_duration):
-        segments.append({
-            'speaker': f'SPEAKER_{i//segment_duration:02d}',
-            'start': float(i),
-            'end': float(min(i + segment_duration, duration_seconds))
-        })
-    
-    return segments
-
-def align_segments_with_speakers(whisper_segments, diarized_segments):
-    """Alinha os segmentos do Whisper com os segmentos diarizados por maior interseção temporal."""
-    def find_best_speaker(start, end):
-        best_speaker = None
-        max_overlap = 0
-        for seg in diarized_segments:
-            overlap = max(0, min(end, seg['end']) - max(start, seg['start']))
-            if overlap > max_overlap:
-                max_overlap = overlap
-                best_speaker = seg['speaker']
-        return best_speaker or 'SPEAKER_00'
-
-    aligned = []
-    for seg in whisper_segments:
-        speaker = find_best_speaker(seg['start'], seg['end'])
-        aligned.append({
-            'speaker': speaker,
-            'start': seg['start'],
-            'end': seg['end'],
-            'text': seg['text']
-        })
-    return aligned
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
