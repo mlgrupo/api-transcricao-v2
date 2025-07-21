@@ -38,13 +38,10 @@ def load_pyannote_pipeline():
         use_auth_token=hf_token
     )
     
-    # Configurações ULTRA-RÁPIDAS para CCX33
+    # Configurações ULTRA-RÁPIDAS para CCX33 (parâmetros válidos)
     pipeline.instantiate({
         "segmentation": {
-            "min_duration_off": 1.0,  # Segmentos mais longos = mais rápido
-            "min_duration_on": 1.0,
-            "threshold": 0.3,  # Threshold muito baixo = velocidade máxima
-            "min_duration": 1.0
+            "threshold": 0.3  # Threshold muito baixo = velocidade máxima
         },
         "clustering": {
             "method": "fast",  # Clustering mais rápido
