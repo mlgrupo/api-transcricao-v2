@@ -1,10 +1,25 @@
-# Versão otimizada para espaço
-numpy>=1.20.0
-tqdm>=4.67.1
-more-itertools>=10.6.0
-transformers>=4.30.0
+# Dependências para transcrição otimizada
+# NumPy - Computação numérica (versão estável)
+numpy>=1.21.0,<2.0.0
+
+# PyTorch - Framework de ML (CPU otimizado)
+torch>=1.13.0
+torchaudio>=0.13.0
+
+# Whisper - Modelo de transcrição
 openai-whisper==20231117
-numba>=0.58.0
-tiktoken>=0.4.0
-ffmpeg-python
+
+# Processamento de áudio
 pydub==0.25.1
+ffmpeg-python>=0.2.0
+
+# Utilitários
+tqdm>=4.64.0
+tiktoken>=0.4.0
+
+# Otimizações (opcionais)
+numba>=0.56.0
+more-itertools>=8.14.0
+
+# Logging e configuração
+colorama>=0.4.5

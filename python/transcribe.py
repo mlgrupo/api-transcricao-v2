@@ -26,15 +26,27 @@ def setup_cpu_optimization():
     cpu_count = multiprocessing.cpu_count()
     
     # Configurar PyTorch para usar todos os cores
-    if torch.cuda.is_available():
-        torch.set_num_threads(cpu_count)
-    else:
-        # Para CPU, usar todos os cores disponíveis
-        torch.set_num_threads(cpu_count)
-        torch.set_num_interop_threads(cpu_count)
+    try:
+        if torch.cuda.is_available():
+            torch.set_num_threads(cpu_count)
+            logger.info(f"PyTorch CUDA configurado para {cpu_count} threads")
+        else:
+            # Para CPU, usar todos os cores disponíveis
+            torch.set_num_threads(cpu_count)
+            torch.set_num_interop_threads(cpu_count)
+            logger.info(f"PyTorch CPU configurado para {cpu_count} threads")
+    except Exception as e:
+        logger.warning(f"Erro ao configurar PyTorch threads: {e}")
+        pass
     
-    # Configurar NumPy para usar todos os cores
-    np.set_num_threads(cpu_count)
+    # Configurar NumPy para usar todos os cores (compatibilidade)
+    try:
+        np.set_num_threads(cpu_count)
+        logger.info(f"NumPy configurado para {cpu_count} threads")
+    except AttributeError:
+        # Versões mais antigas do NumPy não têm set_num_threads
+        logger.info(f"NumPy não suporta set_num_threads, usando configuração padrão")
+        pass
     
     # Configurar variáveis de ambiente para bibliotecas BLAS
     os.environ['OMP_NUM_THREADS'] = str(cpu_count)
