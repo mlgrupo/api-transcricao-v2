@@ -324,4 +324,147 @@ export class TranscriptionController {
       res.status(500).json({ error: error.message });
     }
   }
+
+  /**
+   * Reenvia a transcrição já salva no banco para o Google Drive (apenas admin)
+   */
+  public async reuploadTranscription(req: Request, res: Response): Promise<void> {
+    try {
+      const user = (req as any).user;
+      if (!user || !user.isAdmin) {
+        res.status(403).json({ error: 'Acesso restrito a administradores.' });
+        return;
+      }
+      const { videoId } = req.params;
+      if (!videoId) {
+        res.status(400).json({ error: 'ID do vídeo é obrigatório.' });
+        return;
+      }
+      // Buscar vídeo e transcrição
+      const video = await this.videoService.getVideoById(videoId);
+      if (!video) {
+        res.status(404).json({ error: 'Vídeo não encontrado.' });
+        return;
+      }
+      if (!video.transcrito || typeof video.transcrito !== 'string' || video.transcrito.trim().length === 0) {
+        res.status(404).json({ error: 'Transcrição não encontrada para este vídeo.' });
+        return;
+      }
+      const transcription = video.transcrito;
+      const userEmail = video.userEmail;
+      // Buscar tokens do usuário
+      const { CollaboratorRepository } = require('../../data/repositories/collaborator-repository');
+      const { TokenManager } = require('../../infrastructure/auth/token-manager');
+      const { DriveService } = require('../../core/drive/drive-service');
+      const { ConfigRepository } = require('../../data/repositories/config-repository');
+      const logger = new Logger();
+      const collaboratorRepository = new CollaboratorRepository(logger);
+      const tokenManager = new TokenManager(collaboratorRepository, logger);
+      const driveService = new DriveService(logger);
+      // Buscar tokens atualizados
+      await tokenManager.refreshTokenIfNeeded(userEmail);
+      const tokens = await collaboratorRepository.getUserTokens(userEmail);
+      if (!tokens || !tokens.accessToken) {
+        res.status(400).json({ error: 'Tokens do usuário não encontrados ou inválidos.' });
+        return;
+      }
+      const oauth2Client = tokenManager.createOAuth2Client(tokens.accessToken, tokens.refreshToken);
+      const drive = require('googleapis').google.drive({ version: 'v3', auth: oauth2Client });
+      // Buscar config de pasta personalizada
+      let destinoFolderId = null;
+      let transcriptionDocFileName = `${video.videoName} transcrição.doc`;
+      let baseFileName = video.videoName;
+      let googleDocsUrl = 'Link não disponível';
+      let userId = video.usuarioId;
+      let folderNameTranscricao = process.env.FOLDER_NAME_TRANSCRICAO || 'Transcrição';
+      let rootFolderName = process.env.ROOT_FOLDER_NAME || 'Meet Recordings';
+      let transcriptionConfig = null;
+      if (userId) {
+        const configRepo = new ConfigRepository(logger);
+        transcriptionConfig = await configRepo.getTranscriptionConfig(userId);
+      }
+      if (transcriptionConfig && transcriptionConfig.transcriptionFolder) {
+        const folderInput = transcriptionConfig.transcriptionFolder.trim();
+        const linkMatch = folderInput.match(/folders\/([a-zA-Z0-9_-]+)/);
+        if (linkMatch) {
+          destinoFolderId = linkMatch[1];
+        } else if (/^[a-zA-Z0-9_-]{10,}$/.test(folderInput)) {
+          destinoFolderId = folderInput;
+        } else {
+          const rootFolderId = (await driveService.checkFolderHasCreated(rootFolderName, drive))?.folderId;
+          if (rootFolderId) {
+            const found = await driveService.checkFolderHasCreated(folderInput, drive, rootFolderId);
+            if (found) destinoFolderId = found.folderId;
+            else destinoFolderId = await driveService.createFolder(drive, folderInput, rootFolderId);
+          }
+        }
+      }
+      if (!destinoFolderId) {
+        const rootFolderId = (await driveService.checkFolderHasCreated(rootFolderName, drive))?.folderId;
+        const transFolder = await driveService.checkFolderHasCreated(folderNameTranscricao, drive, rootFolderId);
+        destinoFolderId = transFolder ? transFolder.folderId : await driveService.createFolder(drive, folderNameTranscricao, rootFolderId);
+      }
+      // Upload do arquivo
+      try {
+        await driveService.uploadFile(
+          drive,
+          destinoFolderId,
+          transcriptionDocFileName,
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          transcription
+        );
+      } catch (err: any) {
+        if (err && err.message && err.message.toLowerCase().includes('invalid credentials')) {
+          logger.warn('Credenciais inválidas detectadas ao reenviar arquivo, tentando renovar token...', { userEmail });
+          await tokenManager.refreshTokenIfNeeded(userEmail);
+          const refreshedTokens = await collaboratorRepository.getUserTokens(userEmail);
+          const refreshedOauth2Client = tokenManager.createOAuth2Client(refreshedTokens?.accessToken || '', refreshedTokens?.refreshToken);
+          const refreshedDrive = require('googleapis').google.drive({ version: 'v3', auth: refreshedOauth2Client });
+          await driveService.uploadFile(
+            refreshedDrive,
+            destinoFolderId,
+            transcriptionDocFileName,
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            transcription
+          );
+        } else {
+          throw err;
+        }
+      }
+      // Buscar o documento criado para obter a URL
+      try {
+        const searchName = `${baseFileName} transcrição`;
+        const found = await driveService.searchFilesByNamePart(
+          drive,
+          searchName,
+          destinoFolderId
+        );
+        let foundDoc = null;
+        if (found && found.length > 0) {
+          foundDoc = found.find((f: any) => f.name.toLowerCase().includes(baseFileName.toLowerCase()) && f.name.toLowerCase().includes('transcrição'));
+        }
+        if (foundDoc) {
+          googleDocsUrl = `https://drive.google.com/file/d/${foundDoc.id}/view`;
+          if (foundDoc.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+            googleDocsUrl = `https://docs.google.com/document/d/${foundDoc.id}/edit`;
+          }
+          // Atualizar link no banco
+          await this.videoService.updateGoogleDocsUrl(String(videoId), String(googleDocsUrl));
+        }
+      } catch (urlError: any) {
+        logger.warn('Não foi possível obter a URL do documento criado', {
+          videoId,
+          error: urlError && urlError.message ? urlError.message : String(urlError)
+        });
+      }
+      res.status(200).json({
+        success: true,
+        message: 'Transcrição reenviada com sucesso para o Google Drive.',
+        googleDocsUrl
+      });
+    } catch (error: any) {
+      this.logger.error('Erro ao reenviar transcrição para o Drive:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
 }

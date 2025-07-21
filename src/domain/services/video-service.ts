@@ -234,4 +234,8 @@ export class VideoService {
   async getLastVideoByUserAndFolder(userId: string, folderId: string) {
     return this.videoRepository.getLastVideoByUserAndFolder(userId, folderId);
   }
+
+  public async updateGoogleDocsUrl(videoId: string, googleDocsUrl: string): Promise<Video> {
+    return this.videoRepository.updateGoogleDocsUrl(videoId, googleDocsUrl);
+  }
 }

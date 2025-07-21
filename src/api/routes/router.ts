@@ -93,6 +93,8 @@ export const setupRoutes = (
   app.post('/api/videos/:videoId/process-now', jwtAuthMiddleware, transcriptionController.processNow.bind(transcriptionController));
   // @ts-ignore
   app.post('/api/videos/:videoId/cancel', jwtAuthMiddleware, transcriptionController.cancelVideo.bind(transcriptionController));
+  // @ts-ignore
+  app.post('/api/videos/:videoId/reupload-transcription', jwtAuthMiddleware, asyncHandler(transcriptionController.reuploadTranscription.bind(transcriptionController)));
 
   // Rotas de drives conectados
   // @ts-ignore

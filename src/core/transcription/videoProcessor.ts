@@ -259,13 +259,32 @@ export class VideoProcessor {
           fileName: transcriptionDocFileName,
         });
         // Salvar arquivo na pasta correta
-        await this.driveService.uploadFile(
-          drive,
-          destinoFolderId,
-          transcriptionDocFileName,
-          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-          transcription
-        );
+        try {
+          await this.driveService.uploadFile(
+            drive,
+            destinoFolderId,
+            transcriptionDocFileName,
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            transcription
+          );
+        } catch (err: any) {
+          if (err && err.message && err.message.toLowerCase().includes('invalid credentials')) {
+            this.logger.warn('Credenciais inválidas detectadas ao enviar arquivo, tentando renovar token...', { userEmail });
+            await this.tokenManager.refreshTokenIfNeeded(userEmail);
+            const refreshedTokens = await this.collaboratorRepository.getUserTokens(userEmail);
+            const refreshedOauth2Client = this.tokenManager.createOAuth2Client(refreshedTokens?.accessToken || '', refreshedTokens?.refreshToken);
+            const refreshedDrive = google.drive({ version: 'v3', auth: refreshedOauth2Client });
+            await this.driveService.uploadFile(
+              refreshedDrive,
+              destinoFolderId,
+              transcriptionDocFileName,
+              'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+              transcription
+            );
+          } else {
+            throw err;
+          }
+        }
 
         // Buscar o documento criado para obter a URL
         try {
