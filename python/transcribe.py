@@ -110,6 +110,7 @@ def transcribe_audio(audio_path):
         full_text = ""
         chunk_count = 0
         all_segments = []
+        formatted_segments = []  # Novo: lista para armazenar os segmentos formatados
 
         logger.info("📂 Dividindo áudio em chunks...")
         for chunk_path, chunk_index in split_audio_streaming(audio_path):
@@ -152,6 +153,16 @@ def transcribe_audio(audio_path):
                 all_segments.append(segment)
                 segments_count += 1
 
+                # Novo: formatar o segmento no padrão desejado
+                def format_time(seconds):
+                    h = int(seconds // 3600)
+                    m = int((seconds % 3600) // 60)
+                    s = int(seconds % 60)
+                    return f"{h:02}:{m:02}:{s:02}"
+                start_str = format_time(segment["start"])
+                end_str = format_time(segment["end"])
+                formatted_segments.append(f"[{start_str} -> {end_str}] {processed_text}")
+
             logger.info(f"📝 Chunk {chunk_count} processado: {segments_count} segmentos")
             logger.info(f"🔧 Aplicando processamento de texto ao chunk {chunk_count}...")
 
@@ -167,12 +178,14 @@ def transcribe_audio(audio_path):
             except Exception as e:
                 logger.warning(f"⚠️ Erro ao remover arquivo temporário {chunk_path}: {e}")
 
-        logger.info(f"🎉 Transcrição concluída com sucesso!")
-        logger.info(f"📊 Resumo: {chunk_count} chunks, {len(all_segments)} segmentos, {len(full_text)} caracteres")
+        # Novo: gerar o texto final no formato desejado
+        formatted_text = "\n".join(formatted_segments)
+        logger.info(f"\ud83c\udf89 Transcrição concluída com sucesso!")
+        logger.info(f"\ud83d\udcca Resumo: {chunk_count} chunks, {len(all_segments)} segmentos, {len(formatted_text)} caracteres")
         
         return json.dumps({
             "status": "success",
-            "text": full_text.strip(),
+            "text": formatted_text.strip(),
             "segments": all_segments,
             "chunks": chunk_count,
             "language": "pt"
