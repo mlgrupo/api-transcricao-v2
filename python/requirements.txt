@@ -23,3 +23,12 @@ more-itertools>=8.14.0
 
 # Logging e configuração
 colorama>=0.4.5
+
+# Diarização de locutores (Pyannote)
+pyannote.audio>=3.1.0
+scikit-learn>=1.0.0
+# HuggingFace Hub para autenticação de modelos
+huggingface_hub>=0.16.0
+
+# Ferramenta de manipulação de áudio (necessária para pyannote e whisper)
+ffmpeg
