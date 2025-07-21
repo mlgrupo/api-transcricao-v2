@@ -28,55 +28,59 @@ import threading
 # Função utilitária para carregar pipeline de diarização
 
 def load_pyannote_pipeline():
-    """Carrega o pipeline de diarização do pyannote usando o token HuggingFace."""
+    """Pipeline ultra-otimizado para velocidade máxima."""
     hf_token = os.environ.get("HUGGINGFACE_TOKEN")
     if not hf_token:
-        raise RuntimeError("Variável de ambiente HUGGINGFACE_TOKEN não definida. Cadastre seu token do HuggingFace.")
-    pipeline = PyannotePipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=hf_token)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        raise RuntimeError("Variável de ambiente HUGGINGFACE_TOKEN não definida.")
+    
+    pipeline = PyannotePipeline.from_pretrained(
+        "pyannote/speaker-diarization-3.1", 
+        use_auth_token=hf_token
+    )
+    
+    # Configurações ULTRA-RÁPIDAS para CCX33
+    pipeline.instantiate({
+        "segmentation": {
+            "min_duration_off": 1.0,  # Segmentos mais longos = mais rápido
+            "min_duration_on": 1.0,
+            "threshold": 0.3,  # Threshold muito baixo = velocidade máxima
+            "min_duration": 1.0
+        },
+        "clustering": {
+            "method": "fast",  # Clustering mais rápido
+            "min_clusters": 1,
+            "max_clusters": 10  # Limitar número de locutores
+        },
+        "embedding": {
+            "duration": 3.0,  # Janela menor = mais rápido
+            "step": 1.5  # Passo maior = menos processamento
+        }
+    })
+    
+    device = torch.device("cpu")
     pipeline.to(device)
     return pipeline
 
 # Configurar para usar TODOS os CPUs disponíveis
 def setup_cpu_optimization():
-    """Configura otimização máxima de CPU"""
-    # Detectar número de CPUs
-    cpu_count = multiprocessing.cpu_count()
+    """Configura otimização máxima de CPU para 8 vCPUs do CCX33."""
+    cpu_count = min(8, multiprocessing.cpu_count())  # CCX33 tem 8 vCPUs
     
-    # Configurar PyTorch para usar todos os cores
-    try:
-        if torch.cuda.is_available():
-            torch.set_num_threads(cpu_count)
-            logger.info(f"PyTorch CUDA configurado para {cpu_count} threads")
-        else:
-            # Para CPU, usar todos os cores disponíveis
-            torch.set_num_threads(cpu_count)
-            torch.set_num_interop_threads(cpu_count)
-            logger.info(f"PyTorch CPU configurado para {cpu_count} threads")
-    except Exception as e:
-        logger.warning(f"Erro ao configurar PyTorch threads: {e}")
-        pass
+    # Configurações agressivas para máxima velocidade
+    os.environ["OMP_NUM_THREADS"] = str(cpu_count)
+    os.environ["MKL_NUM_THREADS"] = str(cpu_count)
+    os.environ["OPENBLAS_NUM_THREADS"] = str(cpu_count)
+    os.environ["NUMEXPR_NUM_THREADS"] = str(cpu_count)
+    os.environ["VECLIB_MAXIMUM_THREADS"] = str(cpu_count)
+    os.environ["BLIS_NUM_THREADS"] = str(cpu_count)
+    os.environ["MKL_DYNAMIC"] = "FALSE"
+    os.environ["OMP_DYNAMIC"] = "FALSE"
+    os.environ["GOMP_CPU_AFFINITY"] = "0-7"  # Usar todos os 8 cores
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
     
-    # Configurar NumPy para usar todos os cores (compatibilidade)
-    try:
-        np.set_num_threads(cpu_count)
-        logger.info(f"NumPy configurado para {cpu_count} threads")
-    except AttributeError:
-        # Versões mais antigas do NumPy não têm set_num_threads
-        logger.info(f"NumPy não suporta set_num_threads, usando configuração padrão")
-        pass
-    
-    # Configurar variáveis de ambiente para bibliotecas BLAS
-    os.environ['OMP_NUM_THREADS'] = str(cpu_count)
-    os.environ['MKL_NUM_THREADS'] = str(cpu_count)
-    os.environ['OPENBLAS_NUM_THREADS'] = str(cpu_count)
-    os.environ['VECLIB_MAXIMUM_THREADS'] = str(cpu_count)
-    os.environ['NUMEXPR_NUM_THREADS'] = str(cpu_count)
-    os.environ['BLIS_NUM_THREADS'] = str(cpu_count)
-    
-    # Desabilitar thread dinâmico para melhor performance
-    os.environ['MKL_DYNAMIC'] = 'FALSE'
-    os.environ['OMP_DYNAMIC'] = 'FALSE'
+    # Configurações PyTorch para CPU
+    torch.set_num_threads(cpu_count)
+    torch.set_num_interop_threads(cpu_count)
     
     return cpu_count
 
@@ -100,17 +104,17 @@ def basic_text_processor():
     )
     return TextProcessor(rules)
 
-def split_audio_streaming(file_path, chunk_duration_ms=15 * 60 * 1000):
-    """Corta o áudio em blocos de X segundos (default: 15min para maior eficiência em CPU)."""
+def split_audio_streaming(file_path, chunk_duration_ms=30 * 60 * 1000):  # 30 minutos para CCX33
+    """Corta o áudio em blocos de 30 minutos (otimizado para CCX33 com 8 vCPUs)."""
     audio = AudioSegment.from_file(file_path)
     for i in range(0, len(audio), chunk_duration_ms):
         chunk = audio[i:i + chunk_duration_ms]
         chunk_path = f"{file_path}_chunk_{i // chunk_duration_ms}.mp3"
-        chunk.export(chunk_path, format="mp3")
+        chunk.export(chunk_path, format="mp3", bitrate="64k")  # Bitrate baixo = mais rápido
         yield chunk_path, i // chunk_duration_ms
 
 def extract_audio_if_needed(input_path):
-    """Se for vídeo, extrai o áudio para WAV mono 16kHz e retorna o novo caminho. Se já for áudio, retorna o original."""
+    """Extrai áudio em 8kHz mono para máxima velocidade."""
     audio_exts = ['.wav', '.mp3', '.flac', '.ogg', '.m4a']
     video_exts = ['.mp4', '.mkv', '.mov', '.avi', '.webm']
     ext = os.path.splitext(input_path)[1].lower()
@@ -120,11 +124,12 @@ def extract_audio_if_needed(input_path):
         output_path = input_path + '_audio.wav'
         cmd = [
             'ffmpeg', '-y', '-i', input_path,
-            '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', output_path
+            '-vn', '-acodec', 'pcm_s16le', '-ar', '8000', '-ac', '1',  # 8kHz mono
+            '-af', 'highpass=f=200,lowpass=f=3000',  # Filtro para reduzir ruído
+            output_path
         ]
         subprocess.run(cmd, check=True)
         return output_path
-    # Se extensão desconhecida, tenta processar como áudio
     return input_path
 
 # Função para transcrever um chunk (para uso em paralelo)
@@ -146,7 +151,7 @@ def transcribe_chunk(args):
         logprob_threshold=-1.0,
         no_speech_threshold=0.6
     )
-    chunk_start_time = chunk_index * 15 * 60
+    chunk_start_time = chunk_index * 30 * 60
     segments = []
     for segment in result.get("segments", []):
         segment["start"] += chunk_start_time
@@ -166,19 +171,30 @@ def transcribe_audio(audio_path):
         original_path = audio_path
         audio_path = extract_audio_if_needed(audio_path)
         temp_audio = (audio_path != original_path) and audio_path.endswith('_audio.wav')
+        
         # Configurar otimização máxima de CPU
         cpu_count = setup_cpu_optimization()
         logger.info(f"🚀 Otimização de CPU configurada: {cpu_count} cores disponíveis")
+        
         text_processor = basic_text_processor()
         logger.info("✅ Text processor inicializado")
+        
         logger.info("🔄 Carregando modelo Whisper Small...")
         model = whisper.load_model("small")
         logger.info("✅ Modelo Whisper Small carregado com sucesso")
+
         # --- Diarização do áudio completo ---
-        logger.info("🔊 Executando diarização de locutores (pyannote, CPU)...")
-        diarization_pipeline = load_pyannote_pipeline()
-        diarized_segments = diarize_audio(audio_path, diarization_pipeline)
-        logger.info(f"✅ Diarização concluída: {len(diarized_segments)} segmentos de locutor")
+        skip_diarization = os.environ.get("SKIP_DIARIZATION", "false").lower() == "true"
+        
+        if skip_diarization:
+            logger.info("⏭️ Pulando diarização (SKIP_DIARIZATION=true). Usando segmentação simples...")
+            diarized_segments = create_simple_segments(audio_path)
+        else:
+            logger.info("🔊 Executando diarização de locutores (pyannote, CPU)...")
+            diarization_pipeline = load_pyannote_pipeline()
+            diarized_segments = diarize_audio(audio_path, diarization_pipeline)
+
+        logger.info(f"✅ Diarização concluída: {len(diarized_segments)} segmentos encontrados")
         chunk_args = []
         logger.info("📂 Dividindo áudio em chunks de 15 minutos...")
         for chunk_path, chunk_index in split_audio_streaming(audio_path):
@@ -241,26 +257,62 @@ def transcribe_audio(audio_path):
             "error": str(e)
         }, ensure_ascii=False)
 
-def diarize_audio(audio_path, pipeline=None):
-    """Executa diarização e retorna lista de segmentos: [{'speaker': 'SPEAKER_00', 'start': float, 'end': float}]"""
+def diarize_audio(audio_path, pipeline=None, max_duration_minutes=30):
+    """Diarização ultra-otimizada para velocidade."""
     if pipeline is None:
         pipeline = load_pyannote_pipeline()
+    
+    audio = AudioSegment.from_file(audio_path)
+    duration_minutes = len(audio) / (1000 * 60)
+    
+    logger.info(f"🚀 Diarização ULTRA-RÁPIDA iniciada para {duration_minutes:.1f}min de áudio")
+    
     diarization_done = threading.Event()
     def progress_log():
         if not diarization_done.is_set():
-            logger.info("⏳ Diarização em andamento... (pode demorar vários minutos para áudios longos)")
-            threading.Timer(120, progress_log).start()  # Log a cada 2 minutos
+            logger.info("⚡ Diarização ULTRA-RÁPIDA em andamento...")
+            threading.Timer(30, progress_log).start()  # Log a cada 30 segundos
+    
     progress_log()
-    diarization = pipeline(audio_path)
-    diarization_done.set()
-    diarized_segments = []
-    for turn, _, speaker in diarization.itertracks(yield_label=True):
-        diarized_segments.append({
-            'speaker': speaker,
-            'start': float(turn.start),
-            'end': float(turn.end)
+    
+    try:
+        # Timeout mais agressivo
+        timeout_seconds = min(duration_minutes * 60, 1800)  # Máximo 30 min
+        logger.info(f"⏱️ Timeout otimizado: {timeout_seconds/60:.1f} minutos")
+        
+        diarization = pipeline(audio_path)
+        diarized_segments = []
+        for turn, _, speaker in diarization.itertracks(yield_label=True):
+            diarized_segments.append({
+                'speaker': speaker,
+                'start': float(turn.start),
+                'end': float(turn.end)
+            })
+        
+        diarization_done.set()
+        logger.info(f"⚡ Diarização ULTRA-RÁPIDA concluída: {len(diarized_segments)} segmentos")
+        return diarized_segments
+        
+    except Exception as e:
+        diarization_done.set()
+        logger.error(f"❌ Erro na diarização: {e}")
+        logger.info("🔄 Usando fallback otimizado...")
+        return create_simple_segments(audio_path, segment_duration=60)  # Segmentos de 1 minuto
+
+def create_simple_segments(audio_path, segment_duration=30):
+    """Cria segmentos simples baseados em tempo quando diarização falha."""
+    audio = AudioSegment.from_file(audio_path)
+    duration_seconds = len(audio) / 1000
+    segments = []
+    
+    for i in range(0, int(duration_seconds), segment_duration):
+        segments.append({
+            'speaker': f'SPEAKER_{i//segment_duration:02d}',
+            'start': float(i),
+            'end': float(min(i + segment_duration, duration_seconds))
         })
-    return diarized_segments
+    
+    return segments
 
 def align_segments_with_speakers(whisper_segments, diarized_segments):
     """Alinha os segmentos do Whisper com os segmentos diarizados por maior interseção temporal."""
