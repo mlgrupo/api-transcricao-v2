@@ -153,7 +153,7 @@ class TextProcessor:
                 text = self.ensure_final_punctuation(text)
             # Adicionar remoção de redundâncias
             text = self.remove_redundancies(text)
-            logger.info("Texto processado com sucesso")
+            # Removido log spam - só logar erros
             return text
         except Exception as e:
             logger.error(f"Erro no processamento do texto: {str(e)}")

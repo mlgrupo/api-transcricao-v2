@@ -28,8 +28,8 @@ export class TranscriptionQueue {
   ) {
     this.queue = new Map();
     this.processing = new Set();
-    // Processamento sequencial: apenas 1 job por vez
-    this.maxConcurrentJobs = parseInt(process.env.MAX_CONCURRENT_JOBS || "1", 10);
+    // Processamento simultâneo: 2 jobs por vez (otimizado para servidor)
+    this.maxConcurrentJobs = parseInt(process.env.MAX_CONCURRENT_JOBS || "2", 10);
 
     this.logger.info(`Fila de transcrição inicializada com limite de ${this.maxConcurrentJobs} jobs simultâneos`);
   }

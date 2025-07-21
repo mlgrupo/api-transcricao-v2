@@ -5,7 +5,7 @@ Transcrição Simples e Eficiente
 - Chunks de 10 minutos para evitar travamentos
 - Paralelismo real com múltiplos processos
 - Logs detalhados de progresso
-- Otimização máxima de CPU
+- Otimização máxima de CPU - TODOS OS CORES
 """
 
 import sys
@@ -15,6 +15,40 @@ import whisper
 from text_processor import TextProcessor, TextProcessingRules
 from pydub import AudioSegment
 import os
+import multiprocessing
+import torch
+import numpy as np
+
+# Configurar para usar TODOS os CPUs disponíveis
+def setup_cpu_optimization():
+    """Configura otimização máxima de CPU"""
+    # Detectar número de CPUs
+    cpu_count = multiprocessing.cpu_count()
+    
+    # Configurar PyTorch para usar todos os cores
+    if torch.cuda.is_available():
+        torch.set_num_threads(cpu_count)
+    else:
+        # Para CPU, usar todos os cores disponíveis
+        torch.set_num_threads(cpu_count)
+        torch.set_num_interop_threads(cpu_count)
+    
+    # Configurar NumPy para usar todos os cores
+    np.set_num_threads(cpu_count)
+    
+    # Configurar variáveis de ambiente para bibliotecas BLAS
+    os.environ['OMP_NUM_THREADS'] = str(cpu_count)
+    os.environ['MKL_NUM_THREADS'] = str(cpu_count)
+    os.environ['OPENBLAS_NUM_THREADS'] = str(cpu_count)
+    os.environ['VECLIB_MAXIMUM_THREADS'] = str(cpu_count)
+    os.environ['NUMEXPR_NUM_THREADS'] = str(cpu_count)
+    os.environ['BLIS_NUM_THREADS'] = str(cpu_count)
+    
+    # Desabilitar thread dinâmico para melhor performance
+    os.environ['MKL_DYNAMIC'] = 'FALSE'
+    os.environ['OMP_DYNAMIC'] = 'FALSE'
+    
+    return cpu_count
 
 # Configurar logging
 logging.basicConfig(
@@ -48,6 +82,10 @@ def split_audio_streaming(file_path, chunk_duration_ms=5 * 60 * 1000):
 
 def transcribe_audio(audio_path):
     try:
+        # Configurar otimização máxima de CPU
+        cpu_count = setup_cpu_optimization()
+        logger.info(f"🚀 Otimização de CPU configurada: {cpu_count} cores disponíveis")
+        
         logger.info(f"🎯 Iniciando transcrição do arquivo: {audio_path}")
         
         text_processor = basic_text_processor()
@@ -75,7 +113,14 @@ def transcribe_audio(audio_path):
                     "Transcreva em português do Brasil. "
                     "Use linguagem formal e evite redundâncias. "
                     "Corrija erros comuns e normalize números."
-                )
+                ),
+                # Otimizações para usar todos os CPUs
+                fp16=False,  # Usar FP32 para melhor compatibilidade com CPU
+                verbose=False,  # Reduzir logs do Whisper
+                condition_on_previous_text=False,  # Desabilitar para melhor performance
+                compression_ratio_threshold=2.4,  # Otimizar threshold
+                logprob_threshold=-1.0,  # Otimizar threshold
+                no_speech_threshold=0.6  # Otimizar threshold
             )
             logger.info(f"✅ Chunk {chunk_count} transcrito com sucesso")
 
@@ -96,10 +141,13 @@ def transcribe_audio(audio_path):
                 segments_count += 1
 
             logger.info(f"📝 Chunk {chunk_count} processado: {segments_count} segmentos")
+            logger.info(f"🔧 Aplicando processamento de texto ao chunk {chunk_count}...")
 
             # Adicionar texto processado ao resultado completo
             processed = text_processor.process(result["text"])
             full_text += processed + "\n"
+            
+            logger.info(f"✅ Processamento de texto concluído para chunk {chunk_count}")
 
             try:
                 os.remove(chunk_path)

@@ -175,9 +175,16 @@ export class TranscriptionProcessor {
             env: {
               ...process.env,
               PYTHONPATH: path.join(process.cwd(), 'python'),
-              OMP_NUM_THREADS: '4',
-              MKL_NUM_THREADS: '4',
-              PYTORCH_NUM_THREADS: '4'
+              OMP_NUM_THREADS: '8',           // Usar todos os 8 vCPUs
+              MKL_NUM_THREADS: '8',           // Intel MKL usar todos os cores
+              PYTORCH_NUM_THREADS: '8',       // PyTorch usar todos os cores
+              OPENBLAS_NUM_THREADS: '8',      // OpenBLAS usar todos os cores
+              VECLIB_MAXIMUM_THREADS: '8',    // macOS BLAS usar todos os cores
+              NUMEXPR_NUM_THREADS: '8',       // NumExpr usar todos os cores
+              BLIS_NUM_THREADS: '8',          // BLIS usar todos os cores
+              MKL_DYNAMIC: 'FALSE',           // Desabilitar thread dinâmico
+              OMP_DYNAMIC: 'FALSE',           // Desabilitar thread dinâmico
+              GOMP_CPU_AFFINITY: '0-7'        // Fixar threads nos cores 0-7
             }
           });
 
