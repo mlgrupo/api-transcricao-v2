@@ -60,7 +60,7 @@ RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r python/requirements.txt
 
 # Baixa o modelo Whisper medium durante o build (otimizado)
-RUN python -c "import whisper; whisper.load_model('large')"
+RUN python -c "import whisper; whisper.load_model('medium')"
 
 # Cria pasta temporária com permissão total
 RUN mkdir -p /app/temp && chmod 777 /app/temp

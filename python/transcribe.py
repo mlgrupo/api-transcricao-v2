@@ -70,7 +70,7 @@ def basic_text_processor():
     )
     return TextProcessor(rules)
 
-def split_audio_streaming(file_path, chunk_duration_ms=5 * 60 * 1000):
+def split_audio_streaming(file_path, chunk_duration_ms=10 * 60 * 1000):
     """Corta o áudio em blocos de X segundos."""
     audio = AudioSegment.from_file(file_path)
 
@@ -91,9 +91,9 @@ def transcribe_audio(audio_path):
         text_processor = basic_text_processor()
         logger.info("✅ Text processor inicializado")
         
-        logger.info("🔄 Carregando modelo Whisper Large...")
-        model = whisper.load_model("large")  # Alterar para um modelo maior, se necessário
-        logger.info("✅ Modelo Whisper Large carregado com sucesso")
+        logger.info("🔄 Carregando modelo Whisper Medium...")
+        model = whisper.load_model("medium")  # Alterar para um modelo maior, se necessário
+        logger.info("✅ Modelo Whisper Medium carregado com sucesso")
 
         full_text = ""
         chunk_count = 0
@@ -125,7 +125,7 @@ def transcribe_audio(audio_path):
             logger.info(f"✅ Chunk {chunk_count} transcrito com sucesso")
 
             # Ajustar timestamps para posição real no áudio
-            chunk_start_time = chunk_index * 5 * 60  # 5 minutos por chunk
+            chunk_start_time = chunk_index * 10 * 60  # 10 minutos por chunk
             logger.info(f"⏰ Ajustando timestamps para chunk {chunk_count} (início: {chunk_start_time}s)")
             
             segments_count = 0
