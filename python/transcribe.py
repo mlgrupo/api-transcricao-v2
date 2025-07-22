@@ -25,47 +25,6 @@ import concurrent.futures
 import subprocess
 import threading
 
-# Função utilitária para carregar pipeline de diarização
-
-def load_pyannote_pipeline():
-    """Pipeline básico do pyannote.audio sem configurações customizadas."""
-    hf_token = os.environ.get("HUGGINGFACE_TOKEN")
-    if not hf_token:
-        raise RuntimeError("Variável de ambiente HUGGINGFACE_TOKEN não definida.")
-    
-    # Usar pipeline padrão sem configurações customizadas
-    pipeline = PyannotePipeline.from_pretrained(
-        "pyannote/speaker-diarization-3.1", 
-        use_auth_token=hf_token
-    )
-    
-    device = torch.device("cpu")
-    pipeline.to(device)
-    return pipeline
-
-# Configurar para usar TODOS os CPUs disponíveis
-def setup_cpu_optimization():
-    """Configura otimização máxima de CPU para 8 vCPUs do CCX33."""
-    cpu_count = min(8, multiprocessing.cpu_count())  # CCX33 tem 8 vCPUs
-    
-    # Configurações agressivas para máxima velocidade
-    os.environ["OMP_NUM_THREADS"] = str(cpu_count)
-    os.environ["MKL_NUM_THREADS"] = str(cpu_count)
-    os.environ["OPENBLAS_NUM_THREADS"] = str(cpu_count)
-    os.environ["NUMEXPR_NUM_THREADS"] = str(cpu_count)
-    os.environ["VECLIB_MAXIMUM_THREADS"] = str(cpu_count)
-    os.environ["BLIS_NUM_THREADS"] = str(cpu_count)
-    os.environ["MKL_DYNAMIC"] = "FALSE"
-    os.environ["OMP_DYNAMIC"] = "FALSE"
-    os.environ["GOMP_CPU_AFFINITY"] = "0-7"  # Usar todos os 8 cores
-    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
-    
-    # Configurações PyTorch para CPU
-    torch.set_num_threads(cpu_count)
-    torch.set_num_interop_threads(cpu_count)
-    
-    return cpu_count
-
 # Configurar logging
 logging.basicConfig(
     level=logging.INFO,
@@ -86,17 +45,17 @@ def basic_text_processor():
     )
     return TextProcessor(rules)
 
-def split_audio_streaming(file_path, chunk_duration_ms=30 * 60 * 1000):  # 30 minutos para CCX33
-    """Corta o áudio em blocos de 30 minutos (otimizado para CCX33 com 8 vCPUs)."""
+def split_audio_streaming(file_path, chunk_duration_ms=15 * 60 * 1000):
+    """Corta o áudio em blocos de X segundos (default: 15min para maior eficiência em CPU)."""
     audio = AudioSegment.from_file(file_path)
     for i in range(0, len(audio), chunk_duration_ms):
         chunk = audio[i:i + chunk_duration_ms]
         chunk_path = f"{file_path}_chunk_{i // chunk_duration_ms}.mp3"
-        chunk.export(chunk_path, format="mp3", bitrate="64k")  # Bitrate baixo = mais rápido
+        chunk.export(chunk_path, format="mp3")
         yield chunk_path, i // chunk_duration_ms
 
 def extract_audio_if_needed(input_path):
-    """Extrai áudio em 8kHz mono para máxima velocidade."""
+    """Se for vídeo, extrai o áudio para WAV mono 16kHz e retorna o novo caminho. Se já for áudio, retorna o original."""
     audio_exts = ['.wav', '.mp3', '.flac', '.ogg', '.m4a']
     video_exts = ['.mp4', '.mkv', '.mov', '.avi', '.webm']
     ext = os.path.splitext(input_path)[1].lower()
@@ -106,12 +65,11 @@ def extract_audio_if_needed(input_path):
         output_path = input_path + '_audio.wav'
         cmd = [
             'ffmpeg', '-y', '-i', input_path,
-            '-vn', '-acodec', 'pcm_s16le', '-ar', '8000', '-ac', '1',  # 8kHz mono
-            '-af', 'highpass=f=200,lowpass=f=3000',  # Filtro para reduzir ruído
-            output_path
+            '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', output_path
         ]
         subprocess.run(cmd, check=True)
         return output_path
+    # Se extensão desconhecida, tenta processar como áudio
     return input_path
 
 # Função para transcrever um chunk (para uso em paralelo)
@@ -133,7 +91,7 @@ def transcribe_chunk(args):
         logprob_threshold=-1.0,
         no_speech_threshold=0.6
     )
-    chunk_start_time = chunk_index * 30 * 60
+    chunk_start_time = chunk_index * 15 * 60
     segments = []
     for segment in result.get("segments", []):
         segment["start"] += chunk_start_time
@@ -147,46 +105,164 @@ def transcribe_chunk(args):
         pass
     return segments
 
-def diarize_audio(audio_path, pipeline=None, max_duration_minutes=30):
-    """Diarização com fallback automático para segmentação simples."""
+def transcribe_audio(audio_path):
     try:
-        if pipeline is None:
-            pipeline = load_pyannote_pipeline()
+        # NOVO: extrair áudio se necessário
+        original_path = audio_path
+        audio_path = extract_audio_if_needed(audio_path)
+        temp_audio = (audio_path != original_path) and audio_path.endswith('_audio.wav')
         
-        audio = AudioSegment.from_file(audio_path)
-        duration_minutes = len(audio) / (1000 * 60)
+        # Configurar otimização máxima de CPU
+        cpu_count = setup_cpu_optimization()
+        logger.info(f"🚀 Otimização de CPU configurada: {cpu_count} cores disponíveis")
         
-        logger.info(f"🚀 Diarização iniciada para {duration_minutes:.1f}min de áudio")
+        text_processor = basic_text_processor()
+        logger.info("✅ Text processor inicializado")
         
-        diarization_done = threading.Event()
-        def progress_log():
-            if not diarization_done.is_set():
-                logger.info("⚡ Diarização em andamento...")
-                threading.Timer(30, progress_log).start()
+        logger.info("🔄 Carregando modelo Whisper Small...")
+        model = whisper.load_model("small")
+        logger.info("✅ Modelo Whisper Small carregado com sucesso")
+
+        # --- Diarização do áudio completo ---
+        skip_diarization = os.environ.get("SKIP_DIARIZATION", "false").lower() == "true"
         
-        progress_log()
+        if skip_diarization:
+            logger.info("⏭️ Pulando diarização (SKIP_DIARIZATION=true). Usando segmentação simples...")
+            diarized_segments = create_simple_segments(audio_path)
+        else:
+            logger.info("🔊 Executando diarização de locutores (pyannote, CPU)...")
+            diarization_pipeline = load_pyannote_pipeline()
+            diarized_segments = diarize_audio(audio_path, diarization_pipeline)
+
+        logger.info(f"✅ Diarização concluída: {len(diarized_segments)} segmentos encontrados")
         
-        # Tentar diarização com timeout
-        timeout_seconds = min(duration_minutes * 60, 1800)
-        logger.info(f"⏱️ Timeout: {timeout_seconds/60:.1f} minutos")
+        chunk_args = []
+        logger.info("📂 Dividindo áudio em chunks de 15 minutos...")
+        for chunk_path, chunk_index in split_audio_streaming(audio_path):
+            chunk_args.append((chunk_path, chunk_index, model, text_processor))
         
-        diarization = pipeline(audio_path)
-        diarized_segments = []
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
-            diarized_segments.append({
-                'speaker': speaker,
-                'start': float(turn.start),
-                'end': float(turn.end)
-            })
-        
-        diarization_done.set()
-        logger.info(f"⚡ Diarização concluída: {len(diarized_segments)} segmentos")
-        return diarized_segments
-        
+        whisper_segments = []
+        # Processar chunks em paralelo usando todos os núcleos disponíveis
+        logger.info(f"⚡ Transcrevendo {len(chunk_args)} chunks em paralelo com {cpu_count} workers...")
+        with concurrent.futures.ProcessPoolExecutor(max_workers=cpu_count) as executor:
+            for chunk_result in executor.map(transcribe_chunk, chunk_args):
+                whisper_segments.extend(chunk_result)
+        logger.info(f"✅ Transcrição paralela concluída: {len(whisper_segments)} segmentos")
+
+        # --- Alinhar segmentos do Whisper com locutores ---
+        logger.info("🔗 Alinhando segmentos da transcrição com locutores...")
+        aligned = align_segments_with_speakers(whisper_segments, diarized_segments)
+        # Mapear SPEAKER_XX para LOCUTOR_X
+        speaker_map = {}
+        speaker_count = 1
+        formatted_segments = []
+        def format_time(seconds):
+            h = int(seconds // 3600)
+            m = int((seconds % 3600) // 60)
+            s = int(seconds % 60)
+            return f"{h:02}:{m:02}:{s:02}"
+        for seg in aligned:
+            spk = seg['speaker']
+            if spk not in speaker_map:
+                speaker_map[spk] = f"LOCUTOR_{speaker_count}"
+                speaker_count += 1
+            locutor = speaker_map[spk]
+            start_str = format_time(seg['start'])
+            formatted_segments.append(f"{start_str} {locutor}: {seg['text']}")
+        formatted_text = "\n".join(formatted_segments)
+        logger.info(f"🎉 Transcrição e diarização concluídas!")
+        logger.info(f"📊 Resumo: {len(chunk_args)} chunks, {len(aligned)} segmentos, {len(formatted_text)} caracteres")
+        result = json.dumps({
+            "status": "success",
+            "text": formatted_text.strip(),
+            "segments": aligned,
+            "chunks": len(chunk_args),
+            "language": "pt"
+        }, ensure_ascii=False)
+        # Limpeza automática do áudio temporário extraído
+        if temp_audio and os.path.exists(audio_path):
+            try:
+                os.remove(audio_path)
+                logger.info(f"🗑️ Áudio temporário removido: {audio_path}")
+            except Exception as e:
+                logger.warning(f"⚠️ Erro ao remover áudio temporário: {e}")
+        return result
     except Exception as e:
-        logger.error(f"❌ Erro na diarização: {e}")
-        logger.info("🔄 Usando fallback: segmentação simples por tempo")
-        return create_simple_segments(audio_path, segment_duration=60)
+        logger.error(f"❌ Erro na transcrição: {e}")
+        # Limpeza em caso de erro
+        if temp_audio and os.path.exists(audio_path):
+            try:
+                os.remove(audio_path)
+                logger.info(f"🗑️ Áudio temporário removido após erro: {audio_path}")
+            except Exception:
+                pass
+        raise
+
+def load_pyannote_pipeline():
+    """Carrega o pipeline de diarização do pyannote usando o token HuggingFace."""
+    hf_token = os.environ.get("HUGGINGFACE_TOKEN")
+    if not hf_token:
+        raise RuntimeError("Variável de ambiente HUGGINGFACE_TOKEN não definida. Cadastre seu token do HuggingFace.")
+    pipeline = PyannotePipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=hf_token)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    pipeline.to(device)
+    return pipeline
+
+def setup_cpu_optimization():
+    """Configura otimização máxima de CPU"""
+    # Detectar número de CPUs
+    cpu_count = multiprocessing.cpu_count()
+    
+    # Configurar PyTorch para usar todos os cores
+    try:
+        if torch.cuda.is_available():
+            torch.set_num_threads(cpu_count)
+            logger.info(f"PyTorch CUDA configurado para {cpu_count} threads")
+        else:
+            # Para CPU, usar todos os cores disponíveis
+            torch.set_num_threads(cpu_count)
+            torch.set_num_interop_threads(cpu_count)
+            logger.info(f"PyTorch CPU configurado para {cpu_count} threads")
+    except Exception as e:
+        logger.warning(f"Erro ao configurar PyTorch threads: {e}")
+        pass
+    
+    # Configurar NumPy para usar todos os cores (compatibilidade)
+    try:
+        np.set_num_threads(cpu_count)
+        logger.info(f"NumPy configurado para {cpu_count} threads")
+    except AttributeError:
+        # Versões mais antigas do NumPy não têm set_num_threads
+        logger.info(f"NumPy não suporta set_num_threads, usando configuração padrão")
+        pass
+    
+    # Configurar variáveis de ambiente para bibliotecas BLAS
+    os.environ['OMP_NUM_THREADS'] = str(cpu_count)
+    os.environ['MKL_NUM_THREADS'] = str(cpu_count)
+    os.environ['OPENBLAS_NUM_THREADS'] = str(cpu_count)
+    os.environ['VECLIB_MAXIMUM_THREADS'] = str(cpu_count)
+    os.environ['NUMEXPR_NUM_THREADS'] = str(cpu_count)
+    os.environ['BLIS_NUM_THREADS'] = str(cpu_count)
+    
+    # Desabilitar thread dinâmico para melhor performance
+    os.environ['MKL_DYNAMIC'] = 'FALSE'
+    os.environ['OMP_DYNAMIC'] = 'FALSE'
+    
+    return cpu_count
+
+def diarize_audio(audio_path, pipeline=None):
+    """Executa diarização e retorna lista de segmentos: [{'speaker': 'SPEAKER_00', 'start': float, 'end': float}]"""
+    if pipeline is None:
+        pipeline = load_pyannote_pipeline()
+    diarization = pipeline(audio_path)
+    diarized_segments = []
+    for turn, _, speaker in diarization.itertracks(yield_label=True):
+        diarized_segments.append({
+            'speaker': speaker,
+            'start': float(turn.start),
+            'end': float(turn.end)
+        })
+    return diarized_segments
 
 def create_simple_segments(audio_path, segment_duration=30):
     """Cria segmentos simples baseados em tempo quando diarização falha."""
@@ -226,193 +302,19 @@ def align_segments_with_speakers(whisper_segments, diarized_segments):
         })
     return aligned
 
-def transcribe_audio(audio_path):
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Uso: python transcribe.py <caminho_do_audio>")
+        sys.exit(1)
+    
+    audio_path = sys.argv[1]
     try:
-        # NOVO: extrair áudio se necessário
-        original_path = audio_path
-        audio_path = extract_audio_if_needed(audio_path)
-        temp_audio = (audio_path != original_path) and audio_path.endswith('_audio.wav')
-        
-        # Configurar otimização máxima de CPU
-        cpu_count = setup_cpu_optimization()
-        logger.info(f"🚀 Otimização de CPU configurada: {cpu_count} cores disponíveis")
-        
-        text_processor = basic_text_processor()
-        logger.info("✅ Text processor inicializado")
-        
-        logger.info("🔄 Carregando modelo Whisper Small...")
-        model = whisper.load_model("small")
-        logger.info("✅ Modelo Whisper Small carregado com sucesso")
-
-        # --- Diarização com fallback automático ---
-        skip_diarization = os.environ.get("SKIP_DIARIZATION", "false").lower() == "true"
-        
-        if skip_diarization:
-            logger.info("⏭️ Pulando diarização (SKIP_DIARIZATION=true). Usando segmentação simples...")
-            diarized_segments = create_simple_segments(audio_path)
-        else:
-            logger.info("🔊 Executando diarização de locutores (pyannote, CPU)...")
-            try:
-                diarization_pipeline = load_pyannote_pipeline()
-                diarized_segments = diarize_audio(audio_path, diarization_pipeline)
-            except Exception as e:
-                logger.error(f"❌ Erro ao carregar pipeline de diarização: {e}")
-                logger.info("🔄 Usando segmentação simples como fallback...")
-                diarized_segments = create_simple_segments(audio_path)
-
-        logger.info(f"✅ Diarização concluída: {len(diarized_segments)} segmentos encontrados")
-        
-        chunk_args = []
-        logger.info("📂 Dividindo áudio em chunks de 30 minutos...")
-        for chunk_path, chunk_index in split_audio_streaming(audio_path):
-            chunk_args.append((chunk_path, chunk_index, model, text_processor))
-        
-        logger.info(f"⚡ Transcrevendo {len(chunk_args)} chunks em paralelo com {cpu_count}")
-        
-        # Tentar transcrição paralela com timeout
-        all_segments = []
-        try:
-            with concurrent.futures.ProcessPoolExecutor(max_workers=cpu_count) as executor:
-                # Adicionar timeout de 30 minutos para cada chunk
-                future_to_chunk = {
-                    executor.submit(transcribe_chunk, args): args[1] 
-                    for args in chunk_args
-                }
-                
-                for future in concurrent.futures.as_completed(future_to_chunk, timeout=1800):  # 30 min timeout
-                    chunk_index = future_to_chunk[future]
-                    try:
-                        segments = future.result(timeout=600)  # 10 min por chunk
-                        all_segments.extend(segments)
-                        logger.info(f"✅ Chunk {chunk_index} transcrito com sucesso")
-                    except concurrent.futures.TimeoutError:
-                        logger.error(f"❌ Timeout no chunk {chunk_index}")
-                        # Fallback: transcrição sequencial para este chunk
-                        chunk_path = chunk_args[chunk_index][0]
-                        logger.info(f"🔄 Tentando transcrição sequencial para chunk {chunk_index}")
-                        segments = transcribe_chunk_sequential(chunk_path, chunk_index, model, text_processor)
-                        all_segments.extend(segments)
-                    except Exception as e:
-                        logger.error(f"❌ Erro no chunk {chunk_index}: {e}")
-                        # Fallback: transcrição sequencial para este chunk
-                        chunk_path = chunk_args[chunk_index][0]
-                        logger.info(f"🔄 Tentando transcrição sequencial para chunk {chunk_index}")
-                        segments = transcribe_chunk_sequential(chunk_path, chunk_index, model, text_processor)
-                        all_segments.extend(segments)
-                        
-        except concurrent.futures.TimeoutError:
-            logger.error("❌ Timeout na transcrição paralela. Usando transcrição sequencial...")
-            all_segments = transcribe_sequential(chunk_args, model, text_processor)
-        except Exception as e:
-            logger.error(f"❌ Erro na transcrição paralela: {e}. Usando transcrição sequencial...")
-            all_segments = transcribe_sequential(chunk_args, model, text_processor)
-
-        # --- Alinhar segmentos do Whisper com locutores ---
-        logger.info("🔗 Alinhando segmentos da transcrição com locutores...")
-        aligned = align_segments_with_speakers(all_segments, diarized_segments)
-        # Mapear SPEAKER_XX para LOCUTOR_X
-        speaker_map = {}
-        speaker_count = 1
-        formatted_segments = []
-        def format_time(seconds):
-            h = int(seconds // 3600)
-            m = int((seconds % 3600) // 60)
-            s = int(seconds % 60)
-            return f"{h:02}:{m:02}:{s:02}"
-        for seg in aligned:
-            spk = seg['speaker']
-            if spk not in speaker_map:
-                speaker_map[spk] = f"LOCUTOR_{speaker_count}"
-                speaker_count += 1
-            locutor = speaker_map[spk]
-            start_str = format_time(seg['start'])
-            formatted_segments.append(f"{start_str} {locutor}: {seg['text']}")
-        formatted_text = "\n".join(formatted_segments)
-        logger.info(f"🎉 Transcrição e diarização concluídas!")
-        logger.info(f"📊 Resumo: {len(chunk_args)} chunks, {len(aligned)} segmentos, {len(formatted_text)} caracteres")
-        result = json.dumps({
-            "status": "success",
-            "text": formatted_text.strip(),
-            "segments": aligned,
-            "chunks": len(chunk_args),
-            "language": "pt"
-        }, ensure_ascii=False)
-        # Limpeza automática do áudio temporário extraído
-        if temp_audio and os.path.exists(audio_path):
-            try:
-                os.remove(audio_path)
-                logger.info(f"🗑️ Áudio temporário removido: {audio_path}")
-            except Exception as e:
-                logger.warning(f"⚠️ Erro ao remover áudio temporário: {e}")
-        return result
+        result = transcribe_audio(audio_path)
+        print(result)
     except Exception as e:
-        # Limpeza também em caso de erro
-        if 'audio_path' in locals() and 'temp_audio' in locals() and temp_audio and os.path.exists(audio_path):
-            try:
-                os.remove(audio_path)
-                logger.info(f"🗑️ Áudio temporário removido após erro: {audio_path}")
-            except Exception:
-                pass
-        return json.dumps({
+        error_result = json.dumps({
             "status": "error",
             "error": str(e)
         }, ensure_ascii=False)
-
-def transcribe_chunk_sequential(chunk_path, chunk_index, model, text_processor):
-    """Transcrição sequencial de um chunk (fallback)."""
-    try:
-        result = model.transcribe(
-            chunk_path,
-            language="pt",
-            word_timestamps=True,
-            initial_prompt=(
-                "Transcreva em português do Brasil. "
-                "Use linguagem formal e evite redundâncias. "
-                "Corrija erros comuns e normalize números."
-            ),
-            fp16=False,
-            verbose=False,
-            condition_on_previous_text=False,
-            compression_ratio_threshold=2.4,
-            logprob_threshold=-1.0,
-            no_speech_threshold=0.6
-        )
-        chunk_start_time = chunk_index * 30 * 60
-        segments = []
-        for segment in result.get("segments", []):
-            segment["start"] += chunk_start_time
-            segment["end"] += chunk_start_time
-            processed_text = text_processor.process(segment["text"])
-            segment["text"] = processed_text
-            segments.append(segment)
-        try:
-            os.remove(chunk_path)
-        except Exception:
-            pass
-        return segments
-    except Exception as e:
-        logger.error(f"❌ Erro na transcrição sequencial do chunk {chunk_index}: {e}")
-        return []
-
-def transcribe_sequential(chunk_args, model, text_processor):
-    """Transcrição sequencial de todos os chunks (fallback completo)."""
-    logger.info("🔄 Iniciando transcrição sequencial...")
-    all_segments = []
-    for i, (chunk_path, chunk_index, _, _) in enumerate(chunk_args):
-        logger.info(f"🔄 Transcrevendo chunk {i+1}/{len(chunk_args)} sequencialmente...")
-        segments = transcribe_chunk_sequential(chunk_path, chunk_index, model, text_processor)
-        all_segments.extend(segments)
-    logger.info("✅ Transcrição sequencial concluída")
-    return all_segments
-
-if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        sys.stdout.buffer.write(json.dumps({
-            "status": "error",
-            "error": "Please provide the audio file path"
-        }, ensure_ascii=False).encode('utf-8'))
-        sys.exit(1)
-
-    audio_path = sys.argv[1]
-    output = transcribe_audio(audio_path)
-    sys.stdout.buffer.write(output.encode('utf-8')) 
+        print(error_result)
+        sys.exit(1) 
