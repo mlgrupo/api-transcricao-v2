@@ -142,12 +142,12 @@ def transcribe_audio(audio_path):
             chunk_args.append((chunk_path, chunk_index, model, text_processor))
         
         whisper_segments = []
-        # Processar chunks em paralelo usando todos os núcleos disponíveis
-        logger.info(f"⚡ Transcrevendo {len(chunk_args)} chunks em paralelo com {cpu_count} workers...")
-        with concurrent.futures.ProcessPoolExecutor(max_workers=cpu_count) as executor:
+        # Processar chunks em paralelo usando apenas 1 worker no servidor
+        logger.info(f"⚡ Transcrevendo {len(chunk_args)} chunks com 1 worker (sequencial)...")
+        with concurrent.futures.ProcessPoolExecutor(max_workers=1) as executor:
             for chunk_result in executor.map(transcribe_chunk, chunk_args):
                 whisper_segments.extend(chunk_result)
-        logger.info(f"✅ Transcrição paralela concluída: {len(whisper_segments)} segmentos")
+        logger.info(f"✅ Transcrição concluída: {len(whisper_segments)} segmentos")
 
         # --- Alinhar segmentos do Whisper com locutores ---
         logger.info("🔗 Alinhando segmentos da transcrição com locutores...")
