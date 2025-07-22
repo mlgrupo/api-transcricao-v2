@@ -261,20 +261,55 @@ def transcribe_audio(audio_path):
                 diarized_segments = create_simple_segments(audio_path)
 
         logger.info(f"✅ Diarização concluída: {len(diarized_segments)} segmentos encontrados")
+        
         chunk_args = []
-        logger.info("📂 Dividindo áudio em chunks de 15 minutos...")
+        logger.info("📂 Dividindo áudio em chunks de 30 minutos...")
         for chunk_path, chunk_index in split_audio_streaming(audio_path):
             chunk_args.append((chunk_path, chunk_index, model, text_processor))
-        whisper_segments = []
-        # Processar chunks em paralelo usando todos os núcleos disponíveis
-        logger.info(f"⚡ Transcrevendo {len(chunk_args)} chunks em paralelo com {cpu_count} workers...")
-        with concurrent.futures.ProcessPoolExecutor(max_workers=cpu_count) as executor:
-            for chunk_result in executor.map(transcribe_chunk, chunk_args):
-                whisper_segments.extend(chunk_result)
-        logger.info(f"✅ Transcrição paralela concluída: {len(whisper_segments)} segmentos")
+        
+        logger.info(f"⚡ Transcrevendo {len(chunk_args)} chunks em paralelo com {cpu_count}")
+        
+        # Tentar transcrição paralela com timeout
+        all_segments = []
+        try:
+            with concurrent.futures.ProcessPoolExecutor(max_workers=cpu_count) as executor:
+                # Adicionar timeout de 30 minutos para cada chunk
+                future_to_chunk = {
+                    executor.submit(transcribe_chunk, args): args[1] 
+                    for args in chunk_args
+                }
+                
+                for future in concurrent.futures.as_completed(future_to_chunk, timeout=1800):  # 30 min timeout
+                    chunk_index = future_to_chunk[future]
+                    try:
+                        segments = future.result(timeout=600)  # 10 min por chunk
+                        all_segments.extend(segments)
+                        logger.info(f"✅ Chunk {chunk_index} transcrito com sucesso")
+                    except concurrent.futures.TimeoutError:
+                        logger.error(f"❌ Timeout no chunk {chunk_index}")
+                        # Fallback: transcrição sequencial para este chunk
+                        chunk_path = chunk_args[chunk_index][0]
+                        logger.info(f"🔄 Tentando transcrição sequencial para chunk {chunk_index}")
+                        segments = transcribe_chunk_sequential(chunk_path, chunk_index, model, text_processor)
+                        all_segments.extend(segments)
+                    except Exception as e:
+                        logger.error(f"❌ Erro no chunk {chunk_index}: {e}")
+                        # Fallback: transcrição sequencial para este chunk
+                        chunk_path = chunk_args[chunk_index][0]
+                        logger.info(f"🔄 Tentando transcrição sequencial para chunk {chunk_index}")
+                        segments = transcribe_chunk_sequential(chunk_path, chunk_index, model, text_processor)
+                        all_segments.extend(segments)
+                        
+        except concurrent.futures.TimeoutError:
+            logger.error("❌ Timeout na transcrição paralela. Usando transcrição sequencial...")
+            all_segments = transcribe_sequential(chunk_args, model, text_processor)
+        except Exception as e:
+            logger.error(f"❌ Erro na transcrição paralela: {e}. Usando transcrição sequencial...")
+            all_segments = transcribe_sequential(chunk_args, model, text_processor)
+
         # --- Alinhar segmentos do Whisper com locutores ---
         logger.info("🔗 Alinhando segmentos da transcrição com locutores...")
-        aligned = align_segments_with_speakers(whisper_segments, diarized_segments)
+        aligned = align_segments_with_speakers(all_segments, diarized_segments)
         # Mapear SPEAKER_XX para LOCUTOR_X
         speaker_map = {}
         speaker_count = 1
@@ -322,6 +357,53 @@ def transcribe_audio(audio_path):
             "status": "error",
             "error": str(e)
         }, ensure_ascii=False)
+
+def transcribe_chunk_sequential(chunk_path, chunk_index, model, text_processor):
+    """Transcrição sequencial de um chunk (fallback)."""
+    try:
+        result = model.transcribe(
+            chunk_path,
+            language="pt",
+            word_timestamps=True,
+            initial_prompt=(
+                "Transcreva em português do Brasil. "
+                "Use linguagem formal e evite redundâncias. "
+                "Corrija erros comuns e normalize números."
+            ),
+            fp16=False,
+            verbose=False,
+            condition_on_previous_text=False,
+            compression_ratio_threshold=2.4,
+            logprob_threshold=-1.0,
+            no_speech_threshold=0.6
+        )
+        chunk_start_time = chunk_index * 30 * 60
+        segments = []
+        for segment in result.get("segments", []):
+            segment["start"] += chunk_start_time
+            segment["end"] += chunk_start_time
+            processed_text = text_processor.process(segment["text"])
+            segment["text"] = processed_text
+            segments.append(segment)
+        try:
+            os.remove(chunk_path)
+        except Exception:
+            pass
+        return segments
+    except Exception as e:
+        logger.error(f"❌ Erro na transcrição sequencial do chunk {chunk_index}: {e}")
+        return []
+
+def transcribe_sequential(chunk_args, model, text_processor):
+    """Transcrição sequencial de todos os chunks (fallback completo)."""
+    logger.info("🔄 Iniciando transcrição sequencial...")
+    all_segments = []
+    for i, (chunk_path, chunk_index, _, _) in enumerate(chunk_args):
+        logger.info(f"🔄 Transcrevendo chunk {i+1}/{len(chunk_args)} sequencialmente...")
+        segments = transcribe_chunk_sequential(chunk_path, chunk_index, model, text_processor)
+        all_segments.extend(segments)
+    logger.info("✅ Transcrição sequencial concluída")
+    return all_segments
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
